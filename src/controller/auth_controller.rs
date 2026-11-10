@@ -202,7 +202,8 @@ impl AuthController {
         let username = ctx
             .ctx()
             .opaque()?
-            .login_finish(&payload.session, &payload.credential_finalization)?;
+            .login_finish(&payload.session, &payload.credential_finalization)
+            .await?;
         let user = self.user_service.get_user_by_username(&username).await?;
         if user.status == 0 {
             return Err(ApiError::forbidden("This account has been disabled."));

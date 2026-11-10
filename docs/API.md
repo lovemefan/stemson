@@ -155,7 +155,12 @@ curl -X POST http://127.0.0.1:8080/v1/api/auth/login/finish \
 ```
 
 返回与 3.1 相同的 `access_token`。密码错误返回 `0006` / 401；`session` 过期（默认
-120 秒，`server.auth.opaque.session_ttl`）返回 `0014` / 401。
+120 秒，`server.auth.opaque.session_ttl`）或**已被使用过**返回 `0014` / 401。
+
+严格一次性：`server.auth.opaque.single_use`（默认 `true`）开启后，第二轮会在校验
+`CredentialFinalization` 之前用 `SET NX EX` 原子占位，因此同一个 `session` 即使被
+并发提交也只能成功一次。单实例用 `nonce_store: memory` 即可；多副本部署必须用
+`nonce_store: redis`（共享 Redis，TTL 与 `session_ttl` 一致）。
 
 `session` 是**无状态**的：里面是加密后的 `ServerLogin` 状态和过期时间，任何持有同一
 份 `setup_file` 的实例都能完成第二轮，因此 OPAQUE 登录可以水平扩展，不需要 Redis

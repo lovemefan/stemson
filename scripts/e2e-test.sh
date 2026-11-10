@@ -140,6 +140,17 @@ if [[ "${STEMSON_OPAQUE:-1}" == "1" ]]; then
       check "opaque wrong password rejected" "failed" \
         "$("$OPAQUE_CLIENT" login --url "$BASE_URL" \
              --username "$OPAQUE_USER" --password wrong >/dev/null 2>&1 && echo ok || echo failed)"
+      prepared="$("$OPAQUE_CLIENT" prepare --url "$BASE_URL" \
+        --username "$OPAQUE_USER" --password "$OPAQUE_PASSWORD" 2>/dev/null || true)"
+      if [[ -n "$prepared" && "${STEMSON_SINGLE_USE:-1}" == "1" ]]; then
+        session="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["session"])' <<<"$prepared")"
+        finalization="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["credential_finalization"])' <<<"$prepared")"
+        finish_body="{\"session\":\"${session}\",\"credential_finalization\":\"${finalization}\"}"
+        check "first use of a login session" "0000" \
+          "$(request POST /v1/api/auth/login/finish "$finish_body" | json_field code)"
+        check "replayed login session rejected" "0014" \
+          "$(request POST /v1/api/auth/login/finish "$finish_body" | json_field code)"
+      fi
       check "opaque token cannot be reused as password" "0006" \
         "$(request POST /v1/api/auth "{\"username\":\"${OPAQUE_USER}\",\"password\":\"${OPAQUE_PASSWORD}\"}" | json_field code)"
     fi

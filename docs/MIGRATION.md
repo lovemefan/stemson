@@ -61,9 +61,10 @@
 
 **已知取舍**
 
-- 第二轮登录的 `session` 是无状态加密串，默认 120 秒有效；在有效期内重放同一对
-  `session` + `credential_finalization` 可以再次换到 token（等价于 token 被窃取）。
-  需要严格一次性时可加 Redis nonce 表，当前实现选择「无状态 + 短 TTL」。
+- 第二轮登录的 `session` 是无状态加密串，默认 120 秒有效。`server.auth.opaque.single_use`
+  （默认开启）用 `SET NX EX` 原子占位，保证同一个 `session` 只能成功一次；单实例用
+  `nonce_store: memory`，多副本必须用 `nonce_store: redis`，否则每个副本各有一份
+  内存表，重放可能落到不同实例。若要兼容「客户端重试」，把 TTL 调短比关掉更安全。
 - 未知用户名也返回合法的 `CredentialResponse`（OPAQUE 的假记录机制），不会泄露
   账号是否存在。
 

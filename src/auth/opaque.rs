@@ -37,8 +37,10 @@
 //! embedded expiry). Any instance holding the same setup file can finish the
 //! login, so the deployment stays horizontally scalable.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -52,6 +54,7 @@ use opaque_ke::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::datasource::RedisDataSource;
 use crate::exception::{ApiError, ApiResult};
 
 /// Cipher suite: ristretto255 OPRF, triple-DH key exchange, Argon2 KSF on the
@@ -63,6 +66,68 @@ impl CipherSuite for OpaqueSuite {
     type OprfCs = Ristretto255;
     type KeyExchange = TripleDh<Ristretto255, sha2::Sha512>;
     type Ksf = Argon2<'static>;
+}
+
+/// Where used login sessions are recorded so they cannot be replayed.
+///
+/// A login session is a sealed blob that can be decrypted by any instance, so
+/// "use once" needs shared state when more than one replica runs: use
+/// [`NonceStore::Redis`] there.
+pub enum NonceStore {
+    /// No replay protection (the pre-existing behaviour).
+    Disabled,
+    /// Per-process map, enough for a single instance.
+    Memory(MemoryNonceStore),
+    /// Redis `SET NX EX`, shared by every replica.
+    Redis(Arc<RedisDataSource>),
+}
+
+impl NonceStore {
+    /// An empty in-process store.
+    pub fn memory() -> Self {
+        NonceStore::Memory(MemoryNonceStore::default())
+    }
+
+    /// Claim `key` for `ttl`; `true` only for the first caller.
+    pub async fn claim(&self, key: &str, ttl: Duration) -> ApiResult<bool> {
+        match self {
+            NonceStore::Disabled => Ok(true),
+            NonceStore::Memory(store) => Ok(store.claim(key, ttl)),
+            NonceStore::Redis(redis) => {
+                redis.set_if_absent_ex(key, ttl.as_secs().max(1), "1").await
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for NonceStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self {
+            NonceStore::Disabled => "disabled",
+            NonceStore::Memory(_) => "memory",
+            NonceStore::Redis(_) => "redis",
+        };
+        f.write_str(kind)
+    }
+}
+
+/// Process-local nonce set with expiry.
+#[derive(Default)]
+pub struct MemoryNonceStore {
+    entries: Mutex<HashMap<String, Instant>>,
+}
+
+impl MemoryNonceStore {
+    fn claim(&self, key: &str, ttl: Duration) -> bool {
+        let now = Instant::now();
+        let mut entries = self.entries.lock().expect("nonce store poisoned");
+        entries.retain(|_, expires_at| *expires_at > now);
+        if entries.contains_key(key) {
+            return false;
+        }
+        entries.insert(key.to_string(), now + ttl);
+        true
+    }
 }
 
 /// Result of the first login round.
@@ -78,12 +143,14 @@ pub struct OpaqueAuth {
     setup: ServerSetup<OpaqueSuite>,
     session_cipher: ChaCha20Poly1305,
     session_ttl: Duration,
+    nonces: NonceStore,
 }
 
 impl std::fmt::Debug for OpaqueAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpaqueAuth")
             .field("session_ttl_secs", &self.session_ttl.as_secs())
+            .field("nonce_store", &self.nonces)
             .finish_non_exhaustive()
     }
 }
@@ -97,6 +164,7 @@ impl OpaqueAuth {
     pub fn load_or_create(
         path: impl AsRef<Path>,
         session_ttl_seconds: i64,
+        nonces: NonceStore,
     ) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let setup = if path.exists() {
@@ -131,6 +199,7 @@ impl OpaqueAuth {
             setup,
             session_cipher: ChaCha20Poly1305::new(Key::from_slice(&key)),
             session_ttl: Duration::from_secs(session_ttl_seconds.max(30) as u64),
+            nonces,
         })
     }
 
@@ -187,7 +256,14 @@ impl OpaqueAuth {
     }
 
     /// Second login round: returns the authenticated username.
-    pub fn login_finish(&self, session: &str, finalization: &str) -> ApiResult<String> {
+    ///
+    /// The session is claimed before it is decrypted, so a replayed or
+    /// concurrently submitted session fails even if the finalization is valid.
+    pub async fn login_finish(&self, session: &str, finalization: &str) -> ApiResult<String> {
+        let key = format!("stemson:opaque:session:{}", sha256_hex(session));
+        if !self.nonces.claim(&key, self.session_ttl).await? {
+            return Err(ApiError::unauthorized("login session already used"));
+        }
         let (username, state) = self.open(session)?;
         let state = ServerLogin::<OpaqueSuite>::deserialize(&state)
             .map_err(|_| ApiError::bad_credentials())?;
@@ -250,6 +326,16 @@ impl OpaqueAuth {
 /// Accept both base64url and standard base64, with or without padding:
 /// JavaScript clients (`@serenity-kit/opaque`) and Rust clients disagree on the
 /// alphabet, and the protocol messages are opaque bytes.
+fn sha256_hex(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
 fn decode(input: &str) -> ApiResult<Vec<u8>> {
     let trimmed = input.trim();
     for engine in [
@@ -294,6 +380,7 @@ mod tests {
             setup,
             session_cipher: ChaCha20Poly1305::new(Key::from_slice(&hasher.finalize())),
             session_ttl: Duration::from_secs(120),
+            nonces: NonceStore::memory(),
         }
     }
 
@@ -318,8 +405,8 @@ mod tests {
         auth.registration_finish(&upload).unwrap()
     }
 
-    #[test]
-    fn registers_and_logs_in() {
+    #[tokio::test]
+    async fn registers_and_logs_in() {
         let auth = auth();
         let record = register(&auth, "alice", "correct horse battery staple");
 
@@ -343,13 +430,15 @@ mod tests {
         let finalization = URL_SAFE_NO_PAD.encode(finished.message.serialize());
 
         assert_eq!(
-            auth.login_finish(&start.session, &finalization).unwrap(),
+            auth.login_finish(&start.session, &finalization)
+                .await
+                .unwrap(),
             "alice"
         );
     }
 
-    #[test]
-    fn rejects_a_wrong_password() {
+    #[tokio::test]
+    async fn rejects_a_wrong_password() {
         let auth = auth();
         let record = register(&auth, "alice", "right");
 
@@ -372,8 +461,8 @@ mod tests {
             .is_err());
     }
 
-    #[test]
-    fn answers_unknown_users_without_leaking_existence() {
+    #[tokio::test]
+    async fn answers_unknown_users_without_leaking_existence() {
         let auth = auth();
         let mut rng = opaque_ke::rand::rngs::OsRng;
         let client = ClientLogin::<OpaqueSuite>::start(&mut rng, b"whatever").unwrap();
@@ -392,8 +481,41 @@ mod tests {
         assert_eq!(decode(&standard).unwrap(), bytes);
     }
 
-    #[test]
-    fn rejects_tampered_sessions() {
+    #[tokio::test]
+    async fn rejects_replayed_sessions() {
+        let auth = auth();
+        let record = register(&auth, "alice", "pw");
+        let mut rng = opaque_ke::rand::rngs::OsRng;
+        let client = ClientLogin::<OpaqueSuite>::start(&mut rng, b"pw").unwrap();
+        let request = URL_SAFE_NO_PAD.encode(client.message.serialize());
+        let start = auth.login_start("alice", Some(&record), &request).unwrap();
+        let response =
+            CredentialResponse::<OpaqueSuite>::deserialize(&decode(&start.response).unwrap())
+                .unwrap();
+        let finished = client
+            .state
+            .finish(
+                &mut rng,
+                b"pw",
+                response,
+                ClientLoginFinishParameters::default(),
+            )
+            .unwrap();
+        let finalization = URL_SAFE_NO_PAD.encode(finished.message.serialize());
+
+        assert!(auth
+            .login_finish(&start.session, &finalization)
+            .await
+            .is_ok());
+        let replay = auth
+            .login_finish(&start.session, &finalization)
+            .await
+            .unwrap_err();
+        assert_eq!(replay.status, http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn rejects_tampered_sessions() {
         let auth = auth();
         let record = register(&auth, "alice", "pw");
         let mut rng = opaque_ke::rand::rngs::OsRng;
@@ -405,6 +527,6 @@ mod tests {
         let last = raw.len() - 1;
         raw[last] ^= 0x01;
         let tampered = URL_SAFE_NO_PAD.encode(raw);
-        assert!(auth.login_finish(&tampered, "AAAA").is_err());
+        assert!(auth.login_finish(&tampered, "AAAA").await.is_err());
     }
 }

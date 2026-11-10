@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 
-use crate::auth::opaque::OpaqueAuth;
+use crate::auth::opaque::{NonceStore, OpaqueAuth};
 use crate::auth::{AuthMode, JwtService};
 use crate::config::{Config, ConfigWatcher};
 use crate::core::registry::{ComponentKind, ComponentRegistration, ComponentValue, Container};
@@ -51,7 +51,20 @@ impl AppContext {
                 "config/opaque_server_setup.bin",
             );
             let ttl = config.i64("server.auth.opaque.session_ttl", 120);
-            match OpaqueAuth::load_or_create(path, ttl) {
+            let nonces = if config.bool("server.auth.opaque.single_use", true) {
+                match config
+                    .string("server.auth.opaque.nonce_store", "memory")
+                    .trim()
+                {
+                    "redis" => NonceStore::Redis(std::sync::Arc::new(
+                        crate::datasource::RedisDataSource::from_config(config.clone()),
+                    )),
+                    _ => NonceStore::memory(),
+                }
+            } else {
+                NonceStore::Disabled
+            };
+            match OpaqueAuth::load_or_create(path, ttl, nonces) {
                 Ok(auth) => Some(Arc::new(auth)),
                 Err(err) => {
                     tracing::error!(error = %err, "cannot initialise OPAQUE authentication");

@@ -19,7 +19,7 @@ use opaque_ke::{
     CredentialResponse, RegistrationRequest, RegistrationResponse, RegistrationUpload,
     Ristretto255, TripleDh,
 };
-use stemson::auth::opaque::OpaqueAuth;
+use stemson::auth::opaque::{NonceStore, OpaqueAuth};
 use stemson::utils::hash::{hash_password, verify_password};
 
 struct Suite;
@@ -30,10 +30,12 @@ impl CipherSuite for Suite {
     type Ksf = opaque_ke::argon2::Argon2<'static>;
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let mut rng = opaque_ke::rand::rngs::OsRng;
     let path = PathBuf::from(".bench/opaque_cost_setup.bin");
-    let auth = OpaqueAuth::load_or_create(&path, 120).expect("create server setup");
+    let auth =
+        OpaqueAuth::load_or_create(&path, 120, NonceStore::memory()).expect("create server setup");
 
     // Register one account (client side included; not part of the measurement).
     let started =
@@ -78,6 +80,7 @@ fn main() {
     let finalization = URL_SAFE_NO_PAD.encode(finalization.message.serialize());
     // Sanity: the prepared exchange is valid.
     auth.login_finish(&start.session, &finalization)
+        .await
         .expect("login finish");
 
     let rounds = 200;
@@ -86,11 +89,16 @@ fn main() {
             .login_start("bench", Some(&record), &request)
             .expect("login start");
     });
-    let finish_us = time(rounds, || {
-        let _ = auth
-            .login_finish(&start.session, &finalization)
+    // Each round needs a fresh session: the nonce store rejects replays.
+    let finish_us = time_async(rounds, || async {
+        let login = auth
+            .login_start("bench", Some(&record), &request)
+            .expect("login start");
+        auth.login_finish(&login.session, &finalization)
+            .await
             .expect("login finish");
-    });
+    })
+    .await;
 
     // The password path, for comparison.
     let hash = hash_password("bench-password").expect("hash");
@@ -115,6 +123,19 @@ fn main() {
         1_000_000.0 / (start_us + finish_us),
         1_000_000.0 / verify_us
     );
+}
+
+/// Average microseconds per async operation over `rounds` iterations.
+async fn time_async<F, Fut>(rounds: usize, mut operation: F) -> f64
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let started = Instant::now();
+    for _ in 0..rounds {
+        operation().await;
+    }
+    started.elapsed().as_secs_f64() * 1_000_000.0 / rounds as f64
 }
 
 /// Average microseconds per operation over `rounds` iterations.

@@ -28,6 +28,10 @@ server:
     opaque:
       setup_file: "config/opaque_server_setup.bin"
       session_ttl: 120
+      # reject a login session that was already used (async replay)
+      single_use: true
+      # memory: this process only; redis: shared by all replicas
+      nonce_store: memory
 
   cors:
     # "*" reflects the original behavior; use an explicit list in production

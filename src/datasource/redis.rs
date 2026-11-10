@@ -24,6 +24,18 @@ pub struct RedisDataSource {
 }
 
 impl RedisDataSource {
+    /// Build the datasource directly from configuration.
+    ///
+    /// Used for infrastructure that must exist before the component container is
+    /// built (for example the OPAQUE replay-protection store).
+    pub fn from_config(config: Arc<Config>) -> Self {
+        Self {
+            config,
+            client: OnceLock::new(),
+            connection: tokio::sync::OnceCell::new(),
+        }
+    }
+
     fn client(&self) -> ApiResult<&Client> {
         if let Some(client) = self.client.get() {
             return Ok(client);
@@ -81,6 +93,31 @@ impl RedisDataSource {
             .set_ex::<_, _, ()>(key, value.into(), seconds)
             .await
             .map_err(|err| ApiError::internal("Redis SETEX failed").with_detail(err.to_string()))
+    }
+
+    /// `SET key value NX EX ttl`: returns `true` when this call created the key.
+    ///
+    /// The check and the write are one atomic Redis command, so concurrent
+    /// callers cannot both observe `true`.
+    pub async fn set_if_absent_ex(
+        &self,
+        key: &str,
+        seconds: u64,
+        value: impl Into<String>,
+    ) -> ApiResult<bool> {
+        let mut connection = self.connection().await?;
+        let result: Option<String> = redis::cmd("SET")
+            .arg(key)
+            .arg(value.into())
+            .arg("NX")
+            .arg("EX")
+            .arg(seconds.max(1))
+            .query_async(&mut connection)
+            .await
+            .map_err(|err| {
+                ApiError::internal("Redis SET NX failed").with_detail(err.to_string())
+            })?;
+        Ok(result.is_some())
     }
 
     /// `GET key`
