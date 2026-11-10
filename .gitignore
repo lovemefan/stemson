@@ -17,3 +17,6 @@ Cargo.lock.orig
 .DS_Store
 .smoke/
 .bench/
+
+# OPAQUE server setup (long-term secret, never commit)
+config/opaque_server_setup.bin

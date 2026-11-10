@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 
-use crate::auth::JwtService;
+use crate::auth::opaque::OpaqueAuth;
+use crate::auth::{AuthMode, JwtService};
 use crate::config::{Config, ConfigWatcher};
 use crate::core::registry::{ComponentKind, ComponentRegistration, ComponentValue, Container};
 use crate::core::route::{RouteEntry, RouteTable};
@@ -22,6 +23,8 @@ pub struct AppContext {
     config: Arc<Config>,
     container: RwLock<Container>,
     jwt: Arc<JwtService>,
+    auth_mode: AuthMode,
+    opaque: Option<Arc<OpaqueAuth>>,
     routes: RwLock<RouteTable>,
     controllers: RwLock<Vec<Arc<dyn ControllerBase>>>,
     config_watcher: RwLock<Option<ConfigWatcher>>,
@@ -41,10 +44,29 @@ impl AppContext {
     /// Create the context for a configuration.
     pub fn new(config: Arc<Config>) -> Arc<Self> {
         let jwt = Arc::new(JwtService::from_config(&config));
+        let auth_mode = AuthMode::parse(&config.string("server.auth.mode", "password"));
+        let opaque = if auth_mode.allows_opaque() {
+            let path = config.string(
+                "server.auth.opaque.setup_file",
+                "config/opaque_server_setup.bin",
+            );
+            let ttl = config.i64("server.auth.opaque.session_ttl", 120);
+            match OpaqueAuth::load_or_create(path, ttl) {
+                Ok(auth) => Some(Arc::new(auth)),
+                Err(err) => {
+                    tracing::error!(error = %err, "cannot initialise OPAQUE authentication");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Arc::new(Self {
             config,
             container: RwLock::new(Container::default()),
             jwt,
+            auth_mode,
+            opaque,
             routes: RwLock::new(RouteTable::default()),
             controllers: RwLock::new(Vec::new()),
             config_watcher: RwLock::new(None),
@@ -60,6 +82,20 @@ impl AppContext {
     /// The JWT service.
     pub fn jwt(&self) -> &Arc<JwtService> {
         &self.jwt
+    }
+
+    /// Configured authentication mode.
+    pub fn auth_mode(&self) -> AuthMode {
+        self.auth_mode
+    }
+
+    /// The OPAQUE service, if the mode enables it.
+    pub fn opaque(&self) -> ApiResult<&Arc<OpaqueAuth>> {
+        self.opaque.as_ref().ok_or_else(|| {
+            crate::exception::ApiError::invalid_parameter(
+                "OPAQUE authentication is not enabled on this server",
+            )
+        })
     }
 
     /// Time since the context was created.

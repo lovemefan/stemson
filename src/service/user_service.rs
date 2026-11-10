@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::exception::{ApiError, ApiResult};
 use crate::model::identity::UserIdentity;
 use crate::model::user::{naive_to_local, User};
-use crate::repository::user_repository::{NewUserRecord, UserRepository, UserRow};
+use crate::repository::user_repository::{LoginMaterial, NewUserRecord, UserRepository, UserRow};
 use crate::utils::hash::{hash_password, verify_password};
 use crate::utils::snowflake;
 
@@ -14,8 +14,9 @@ use crate::utils::snowflake;
 pub struct CreateUserCommand {
     /// Login name.
     pub username: String,
-    /// Plain text password (hashed before storage).
-    pub password: String,
+    /// Plain text password. `None` creates an OPAQUE account and returns an
+    /// invitation token instead.
+    pub password: Option<String>,
     /// Optional phone number.
     pub phone: Option<String>,
     /// Optional email.
@@ -76,10 +77,26 @@ impl UserService {
         Ok(row_to_user(row))
     }
 
+    /// Record a successful login.
+    pub async fn touch_login(&self, uid: i64) -> ApiResult<()> {
+        self.user_repository.touch_login(uid).await
+    }
+
+    /// Stored credentials for a login name.
+    pub async fn login_material(&self, username: &str) -> ApiResult<Option<LoginMaterial>> {
+        self.user_repository.login_material(username).await
+    }
+
     /// Verify a username/password pair without touching the login timestamp.
+    ///
+    /// Accounts that only carry an OPAQUE registration record cannot log in
+    /// through the password path.
     pub async fn verify_credentials(&self, username: &str, password: &str) -> ApiResult<bool> {
-        let Some(stored) = self.user_repository.password_hash(username).await? else {
+        let Some(material) = self.user_repository.login_material(username).await? else {
             return Err(ApiError::user_not_exist(username));
+        };
+        let Some(stored) = material.password else {
+            return Ok(false);
         };
         Ok(verify_password(password, &stored))
     }
@@ -98,16 +115,17 @@ impl UserService {
     }
 
     /// Create a user on behalf of an administrator.
+    ///
+    /// With a password the account uses password login (Argon2id). Without one
+    /// the account is OPAQUE-only and the returned invitation token must be
+    /// handed to the user, who registers through `/v1/api/auth/register/*`.
     pub async fn create_user(
         &self,
         command: CreateUserCommand,
         creator_uid: i64,
-    ) -> ApiResult<User> {
+    ) -> ApiResult<(User, Option<String>)> {
         if command.username.trim().is_empty() {
             return Err(ApiError::miss_parameters("username is empty"));
-        }
-        if command.password.is_empty() {
-            return Err(ApiError::miss_parameters("password is empty"));
         }
         if command.role != 0 && command.role != 1 {
             return Err(ApiError::new(
@@ -115,6 +133,20 @@ impl UserService {
                 "role id is not 0 or 1",
             ));
         }
+
+        let password = command
+            .password
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let password_hash = match password {
+            Some(password) => Some(hash_password(password)?),
+            None => None,
+        };
+        let invitation = match password {
+            Some(_) => None,
+            None => Some(new_invitation()),
+        };
 
         let uid = snowflake::next_id()?;
         let identity = if command.role == 1 {
@@ -125,7 +157,7 @@ impl UserService {
         let record = NewUserRecord {
             uid,
             username: command.username.trim().to_string(),
-            password_hash: hash_password(&command.password)?,
+            password_hash,
             phone: normalize_optional(command.phone),
             email: normalize_optional(command.email),
             role: command.role,
@@ -133,7 +165,38 @@ impl UserService {
             create_by: creator_uid,
         };
         self.user_repository.insert_user_and_group(&record).await?;
-        self.get_user_by_uid(uid).await
+
+        let invite_token = match invitation {
+            Some(invitation) => {
+                self.user_repository
+                    .set_invite(uid, &invitation.token_hash, invitation.expires_at)
+                    .await?;
+                Some(invitation.token)
+            }
+            None => None,
+        };
+
+        Ok((self.get_user_by_uid(uid).await?, invite_token))
+    }
+
+    /// Finish an OPAQUE registration with the invitation issued by
+    /// [`UserService::create_user`].
+    pub async fn register_opaque(
+        &self,
+        username: &str,
+        invite_token: &str,
+        registration: Vec<u8>,
+    ) -> ApiResult<()> {
+        let affected = self
+            .user_repository
+            .consume_invite(username, &sha256_hex(invite_token.trim()), &registration)
+            .await?;
+        if affected == 0 {
+            return Err(ApiError::invalid_parameter(
+                "invalid or expired registration invitation",
+            ));
+        }
+        Ok(())
     }
 
     /// Modify the mutable fields of a user.
@@ -208,6 +271,40 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
+}
+
+/// A freshly generated one-time registration invitation.
+struct Invitation {
+    token: String,
+    token_hash: String,
+    expires_at: chrono::NaiveDateTime,
+}
+
+/// Invitations are valid for 24 hours and can be used exactly once.
+fn new_invitation() -> Invitation {
+    use base64::Engine;
+    use opaque_ke::rand::RngCore;
+
+    let mut raw = [0u8; 32];
+    opaque_ke::rand::rngs::OsRng.fill_bytes(&mut raw);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+    Invitation {
+        token_hash: sha256_hex(&token),
+        token,
+        expires_at: chrono::Utc::now().naive_utc() + chrono::Duration::hours(24),
+    }
+}
+
+fn sha256_hex(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(value.as_bytes());
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 fn row_to_user(row: UserRow) -> User {

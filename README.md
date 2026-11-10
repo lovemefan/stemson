@@ -12,6 +12,8 @@
 - **自动路由**：由模块路径推导，和 Python 版 `@Controller` 完全一致
 - **声明式参数校验**：`#[validate(...)]` 对应原来的 6 个校验装饰器
 - **JWT 鉴权**：`#[protected]` / `#[authority([...])]`
+- **OPAQUE 登录**：密码不出客户端，服务端单次登录成本 ~0.23 ms（可选，见
+  [认证方式](docs/API.md#36-opaque-登录推荐)）
 - **统一响应体**：`{ message, data, code }` + 4 位业务码
 - **数据源**：MySQL（参数化查询、事务、批量）、Redis
 
@@ -43,7 +45,9 @@ mysql -uroot -p < mysql/create_database.sql
 - `config/config.docker.yaml`：docker-compose 使用
 
 数据库连接、JWT 密钥、端口都在这里改；**JWT 密钥建议用环境变量**
-`STEMSON_JWT_SECRET` 覆盖。
+`STEMSON_JWT_SECRET` 覆盖。登录方式由 `server.auth.mode` 决定：
+`both`（默认，兼容内置账号）/ `opaque`（仅 OPAQUE，推荐）/ `password`（仅密码）。
+切到 `opaque` 前请先备份 `config/opaque_server_setup.bin`。
 
 ### 3. 运行
 
@@ -200,7 +204,7 @@ scripts/benchmark.sh http://127.0.0.1:8080                   # 内置压测客�
 | 响应码 | `code` 统一为 4 位业务码；HTTP 状态码改为语义正确（400/401/403/404/409/500） |
 | SQL | 删除关键词黑名单，全部改为参数化查询 |
 | 密码 | 由 `MD5+硬编码盐` 改为 **Argon2id**，数据库需要重建/重置密码 |
-| 认证 | 自行实现 JWT（不再依赖 sanic-jwt），claim 统一为 `user_id` |
+| 认证 | 自行实现 JWT（不再依赖 sanic-jwt），claim 统一为 `user_id`；新增 OPAQUE 登录（`server.auth.mode`） |
 | 配置扫描 | 移除 `server.component.*`（Rust 编译期注册，无需运行时扫包） |
 
 ## 文档

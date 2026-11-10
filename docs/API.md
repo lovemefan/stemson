@@ -122,7 +122,102 @@ Authorization: Bearer <token>
 
 返回与登录相同的 `TokenResponse`（`access_token` 为新的 token）。
 
-### 3.5 鉴权规则
+### 3.6 OPAQUE 登录（推荐）
+
+`server.auth.mode` 为 `opaque` 或 `both` 时可用。登录拆成两轮，密码永远不出现在
+服务端；服务端只存 OPAQUE 注册记录（`user.opaque_registration`），不存哈希。
+
+**第一轮**
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/api/auth/login/start \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","credential_request":"<base64url>"}'
+```
+
+```json
+{
+  "message": "success",
+  "data": {
+    "credential_response": "<base64url>",
+    "session": "<base64url，服务端加密状态，客户端原样回传>"
+  },
+  "code": "0000"
+}
+```
+
+**第二轮**
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/api/auth/login/finish \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"<上一轮返回>","credential_finalization":"<base64url>"}'
+```
+
+返回与 3.1 相同的 `access_token`。密码错误返回 `0006` / 401；`session` 过期（默认
+120 秒，`server.auth.opaque.session_ttl`）返回 `0014` / 401。
+
+`session` 是**无状态**的：里面是加密后的 `ServerLogin` 状态和过期时间，任何持有同一
+份 `setup_file` 的实例都能完成第二轮，因此 OPAQUE 登录可以水平扩展，不需要 Redis
+或粘性会话。
+
+### 3.7 OPAQUE 注册（邀请制）
+
+管理员创建用户时不传密码，服务端返回一次性 `invite_token`（24 小时有效、
+只能使用一次）：
+
+```bash
+# 管理员登录后
+curl -X POST http://127.0.0.1:8080/user/user_controller/add_user \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"username":"alice","role":0,"email":"alice@example.com"}'
+```
+
+```json
+{
+  "message": "Add user alice success",
+  "data": {
+    "user_id": 2120078728141873152,
+    "username": "alice",
+    "invite_token": "xRTDrB8-tLJQwoGsoEVAJFnwWyPE6XKZ3bVtXPNJR0k",
+    "registration_required": true
+  },
+  "code": "0000"
+}
+```
+
+用户拿到邀请后完成注册：
+
+```bash
+# 第一轮
+curl -X POST http://127.0.0.1:8080/v1/api/auth/register/start \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","registration_request":"<base64url>"}'
+
+# 第二轮
+curl -X POST http://127.0.0.1:8080/v1/api/auth/register/finish \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","invite_token":"<上面返回的>","registration_upload":"<base64url>"}'
+```
+
+注册成功后该账号的 `password` 置空，只能用 OPAQUE 登录。
+
+**客户端实现**：浏览器/Node 用
+[`@serenity-kit/opaque`](https://github.com/serenity-kit/opaque)（后端同一套
+`opaque-ke` 的 wasm 版）；Rust 客户端示例见 `examples/opaque_client.rs`：
+
+```bash
+cargo run --release --example opaque_client -- register \
+  --url http://127.0.0.1:8080 --username alice --password 's3cret' --invite TOKEN
+cargo run --release --example opaque_client -- login \
+  --url http://127.0.0.1:8080 --username alice --password 's3cret'
+```
+
+服务端成本约 **0.23 ms/次登录**（Argon2id 校验约 14.8 ms），详见
+[docs/BENCHMARK.md](BENCHMARK.md)。
+
+### 3.8 鉴权规则
 
 - 缺少 `Authorization` → `0014`；格式不是 `Bearer <token>` → `0014`；
 - token 伪造/损坏 → `0004`；过期 → `0007`；

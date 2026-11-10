@@ -108,6 +108,46 @@ check "delete user" "0000" \
 check "deleted user is gone" "0013" \
   "$(request POST /user/user_controller/get_user_info "{\"user_id\":${NEW_UID}}" "$TOKEN" | json_field code)"
 
+
+# OPAQUE login: only when the server enables it and the client binary is built.
+if [[ "${STEMSON_OPAQUE:-1}" == "1" ]]; then
+  echo "== opaque login =="
+  OPAQUE_CLIENT="target/release/examples/opaque_client"
+  if [[ ! -x "$OPAQUE_CLIENT" ]] && command -v cargo >/dev/null 2>&1; then
+    cargo build --release --example opaque_client >/dev/null 2>&1 || true
+  fi
+  if [[ -x "$OPAQUE_CLIENT" ]]; then
+    OPAQUE_USER="opaque_$(date +%s)"
+    OPAQUE_PASSWORD="opaque-pass-123"
+    add_body="{\"username\":\"${OPAQUE_USER}\",\"role\":0}"
+    add_response="$(request POST /user/user_controller/add_user "$add_body" "$TOKEN")"
+    INVITE="$(json_field data.invite_token <<<"$add_response")"
+    check "add opaque user returns invite" "true" \
+      "$([[ -n "$INVITE" ]] && echo true || echo false)"
+
+    if [[ -n "$INVITE" ]]; then
+      register_status="$("$OPAQUE_CLIENT" register \
+        --url "$BASE_URL" --username "$OPAQUE_USER" --password "$OPAQUE_PASSWORD" \
+        --invite "$INVITE" >/dev/null 2>&1 && echo ok || echo failed)"
+      check "opaque register" "ok" "$register_status"
+
+      opaque_token="$("$OPAQUE_CLIENT" login \
+        --url "$BASE_URL" --username "$OPAQUE_USER" --password "$OPAQUE_PASSWORD" 2>/dev/null || true)"
+      check "opaque login returns a token" "true" \
+        "$([[ -n "$opaque_token" ]] && echo true || echo false)"
+      check "opaque token reaches /me" "$OPAQUE_USER" \
+        "$(request GET /v1/api/auth/me "" "$opaque_token" | json_field data.me.username)"
+      check "opaque wrong password rejected" "failed" \
+        "$("$OPAQUE_CLIENT" login --url "$BASE_URL" \
+             --username "$OPAQUE_USER" --password wrong >/dev/null 2>&1 && echo ok || echo failed)"
+      check "opaque token cannot be reused as password" "0006" \
+        "$(request POST /v1/api/auth "{\"username\":\"${OPAQUE_USER}\",\"password\":\"${OPAQUE_PASSWORD}\"}" | json_field code)"
+    fi
+  else
+    echo "  skip  opaque_client could not be built"
+  fi
+fi
+
 echo
 echo "passed=${pass} failed=${fail}"
 [[ "$fail" -eq 0 ]]

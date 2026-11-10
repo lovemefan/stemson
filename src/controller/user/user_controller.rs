@@ -144,10 +144,10 @@ impl AddUser {
             .username
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| ApiError::miss_parameters("username is empty"))?;
-        let password = payload
-            .password
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| ApiError::miss_parameters("password is empty"))?;
+        let password = payload.password.filter(|value| !value.is_empty());
+        if password.is_none() && !ctx.ctx().auth_mode().allows_opaque() {
+            return Err(ApiError::miss_parameters("password is empty"));
+        }
         let role = payload
             .role
             .ok_or_else(|| ApiError::miss_parameters("user role is empty"))?;
@@ -158,7 +158,7 @@ impl AddUser {
             ));
         }
 
-        let created = self
+        let (created, invite_token) = self
             .user_service
             .create_user(
                 CreateUserCommand {
@@ -172,9 +172,14 @@ impl AddUser {
             )
             .await?;
 
+        let mut data = created.to_dict();
+        if let Some(invite_token) = invite_token {
+            data["invite_token"] = serde_json::json!(invite_token);
+            data["registration_required"] = serde_json::json!(true);
+        }
         Ok(ApiResponse::success_with_message(
             format!("Add user {} success", created.username),
-            created.to_dict(),
+            data,
         ))
     }
 }

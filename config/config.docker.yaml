@@ -9,6 +9,14 @@ server:
   jwt:
     secret: "change-me-in-production"
     expires_in: 1800
+  auth:
+    # opaque: only OPAQUE (recommended). both: OPAQUE + Argon2id password login
+    # for accounts that still carry a hash (migration/bootstrap). password: legacy.
+    mode: both
+    opaque:
+      setup_file: "config/opaque_server_setup.bin"
+      session_ttl: 120
+
   cors:
     allowed_origins: ["*"]
   snowflake:

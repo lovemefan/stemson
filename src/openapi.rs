@@ -7,7 +7,10 @@
 use axum::Router;
 use utoipa::OpenApi;
 
-use crate::controller::auth_controller::{LoginRequest, TokenResponse};
+use crate::controller::auth_controller::{
+    LoginFinishRequest, LoginRequest, LoginStartRequest, LoginStartResponse, RegisterFinishRequest,
+    RegisterStartRequest, RegisterStartResponse, TokenResponse,
+};
 use crate::controller::user::user_controller::{
     CreateUserRequest, DeleteUserRequest, GetUserInfoRequest, ModifyUserRequest,
     ValidatePasswordRequest,
@@ -39,6 +42,58 @@ pub struct ApiResponseDoc {
     )
 )]
 fn doc_login() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/api/auth/login/start",
+    tag = "auth",
+    request_body = LoginStartRequest,
+    responses(
+        (status = 200, description = "CredentialResponse and the opaque session", body = ApiResponseDoc),
+        (status = 400, description = "OPAQUE is disabled or the request is malformed", body = ApiResponseDoc)
+    )
+)]
+fn doc_login_start() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/api/auth/login/finish",
+    tag = "auth",
+    request_body = LoginFinishRequest,
+    responses(
+        (status = 200, description = "A token was issued", body = ApiResponseDoc),
+        (status = 401, description = "Wrong password or expired session", body = ApiResponseDoc)
+    )
+)]
+fn doc_login_finish() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/api/auth/register/start",
+    tag = "auth",
+    request_body = RegisterStartRequest,
+    responses(
+        (status = 200, description = "RegistrationResponse", body = ApiResponseDoc),
+        (status = 400, description = "OPAQUE is disabled or the request is malformed", body = ApiResponseDoc)
+    )
+)]
+fn doc_register_start() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/api/auth/register/finish",
+    tag = "auth",
+    request_body = RegisterFinishRequest,
+    responses(
+        (status = 200, description = "Registration stored", body = ApiResponseDoc),
+        (status = 400, description = "Invalid or expired invitation", body = ApiResponseDoc)
+    )
+)]
+fn doc_register_finish() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
@@ -184,6 +239,10 @@ fn doc_health() {}
     ),
     paths(
         doc_login,
+        doc_login_start,
+        doc_login_finish,
+        doc_register_start,
+        doc_register_finish,
         doc_me,
         doc_verify,
         doc_refresh,
@@ -198,6 +257,12 @@ fn doc_health() {}
     components(schemas(
         ApiResponseDoc,
         LoginRequest,
+        LoginStartRequest,
+        LoginStartResponse,
+        LoginFinishRequest,
+        RegisterStartRequest,
+        RegisterStartResponse,
+        RegisterFinishRequest,
         TokenResponse,
         ValidatePasswordRequest,
         CreateUserRequest,

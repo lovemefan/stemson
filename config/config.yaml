@@ -21,6 +21,14 @@ server:
     # token lifetime in seconds
     expires_in: 1800
 
+  auth:
+    # opaque: only OPAQUE (recommended). both: OPAQUE + Argon2id password login
+    # for accounts that still carry a hash (migration/bootstrap). password: legacy.
+    mode: both
+    opaque:
+      setup_file: "config/opaque_server_setup.bin"
+      session_ttl: 120
+
   cors:
     # "*" reflects the original behavior; use an explicit list in production
     allowed_origins: ["*"]

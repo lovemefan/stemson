@@ -3,6 +3,11 @@ coding: utf-8
 Schema of the Stemson template (renamed from SanicBoot), carried over from the
 Python project.
 
+Passwords are never stored in clear text: accounts created with OPAQUE keep only
+an opaque registration record in `opaque_registration` and leave `password`
+NULL. The seeded accounts below still carry Argon2id hashes so that the
+password mode (and the `both` migration mode) works out of the box.
+
 Changes compared to `legacy/python/mysql/create_database.sql`:
   * `user.password` is now `varchar(255)` because Argon2id hashes are ~96 bytes
     (the original stored a 32 byte MD5 digest);
@@ -46,7 +51,10 @@ CREATE TABLE `user` (
     `username` varchar(20) NOT NULL COMMENT '用户昵称|登录帐户',
     `phone` varchar(12) DEFAULT NULL COMMENT '手机电话，常用手机号11位，办公电话加上区号十二位',
     `email` varchar(128) DEFAULT NULL COMMENT '邮箱',
-    `password` varchar(255) NOT NULL COMMENT 'Argon2id 密码哈希',
+    `password` varchar(255) DEFAULT NULL COMMENT 'Argon2id 密码哈希（OPAQUE 用户为 NULL）',
+    `opaque_registration` blob DEFAULT NULL COMMENT 'OPAQUE 注册记录，密码永不出现在服务端',
+    `invite_token_hash` char(64) DEFAULT NULL COMMENT '一次性注册邀请令牌的 SHA-256',
+    `invite_expires_at` datetime DEFAULT NULL COMMENT '注册邀请过期时间',
     `user_role` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '角色ID,0表示普通用户，1表示管理员',
     `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `create_by` bigint unsigned NOT NULL COMMENT '创建该用户的用户id，只有管理员才能创建用户',

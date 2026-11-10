@@ -12,7 +12,56 @@
 //! JWT config but read `payload["user_id"]` when retrieving the user, so `/me`
 //! and `@protected` could never resolve a user).
 
+pub mod opaque;
+
 use std::sync::Arc;
+
+/// How clients are allowed to authenticate.
+///
+/// * `password` - Argon2id check over `POST /v1/api/auth` (legacy).
+/// * `opaque`   - OPAQUE only; password login is rejected.
+/// * `both`     - OPAQUE for registered users, password for accounts that still
+///   carry a hash (migration/bootstrap). The weaker path stays reachable, so
+///   switch to `opaque` once every account has registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    /// Argon2id password login only.
+    Password,
+    /// OPAQUE only.
+    Opaque,
+    /// Both, for migration.
+    Both,
+}
+
+impl AuthMode {
+    /// Parse `server.auth.mode`, defaulting to [`AuthMode::Password`].
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "opaque" => AuthMode::Opaque,
+            "both" => AuthMode::Both,
+            _ => AuthMode::Password,
+        }
+    }
+
+    /// Stable name used in logs and `/health`.
+    pub fn name(self) -> &'static str {
+        match self {
+            AuthMode::Password => "password",
+            AuthMode::Opaque => "opaque",
+            AuthMode::Both => "both",
+        }
+    }
+
+    /// Whether `POST /v1/api/auth` (Argon2id) is accepted.
+    pub fn allows_password(self) -> bool {
+        matches!(self, AuthMode::Password | AuthMode::Both)
+    }
+
+    /// Whether the OPAQUE endpoints are available.
+    pub fn allows_opaque(self) -> bool {
+        matches!(self, AuthMode::Opaque | AuthMode::Both)
+    }
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -193,6 +242,20 @@ impl AuthUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_mode_parsing_and_capabilities() {
+        assert_eq!(AuthMode::parse("opaque"), AuthMode::Opaque);
+        assert_eq!(AuthMode::parse(" BOTH "), AuthMode::Both);
+        assert_eq!(AuthMode::parse("password"), AuthMode::Password);
+        assert_eq!(AuthMode::parse("nonsense"), AuthMode::Password);
+
+        assert!(AuthMode::Opaque.allows_opaque());
+        assert!(!AuthMode::Opaque.allows_password());
+        assert!(AuthMode::Both.allows_opaque() && AuthMode::Both.allows_password());
+        assert!(!AuthMode::Password.allows_opaque());
+        assert_eq!(AuthMode::Opaque.name(), "opaque");
+    }
 
     fn service() -> JwtService {
         JwtService::new(b"unit-test-secret", 1800)

@@ -37,6 +37,15 @@ pub struct UserRow {
     pub identity: i64,
 }
 
+/// Stored credentials used by the login endpoints.
+#[derive(Debug, Clone, Default)]
+pub struct LoginMaterial {
+    /// Argon2id hash, when the account still uses password login.
+    pub password: Option<String>,
+    /// Serialized OPAQUE registration record.
+    pub opaque_registration: Option<Vec<u8>>,
+}
+
 /// A user about to be inserted.
 #[derive(Debug, Clone)]
 pub struct NewUserRecord {
@@ -44,8 +53,8 @@ pub struct NewUserRecord {
     pub uid: i64,
     /// Login name.
     pub username: String,
-    /// Argon2id hash.
-    pub password_hash: String,
+    /// Argon2id hash; `None` for OPAQUE accounts.
+    pub password_hash: Option<String>,
     /// Phone number.
     pub phone: Option<String>,
     /// Email address.
@@ -116,20 +125,65 @@ impl UserRepository {
             .await
     }
 
-    /// Stored Argon2id hash for a login name.
-    pub async fn password_hash(&self, username: &str) -> ApiResult<Option<String>> {
+    /// Stored credentials for a login name.
+    pub async fn login_material(&self, username: &str) -> ApiResult<Option<LoginMaterial>> {
         #[derive(FromRow)]
-        struct PasswordRow {
-            password: String,
+        struct MaterialRow {
+            password: Option<String>,
+            opaque_registration: Option<Vec<u8>>,
         }
         let row = self
             .mysql
             .fetch_optional(
-                sqlx::query_as::<_, PasswordRow>("SELECT password FROM user WHERE username = ?")
-                    .bind(username),
+                sqlx::query_as::<_, MaterialRow>(
+                    "SELECT password, opaque_registration FROM user WHERE username = ?",
+                )
+                .bind(username),
             )
             .await?;
-        Ok(row.map(|row| row.password))
+        Ok(row.map(|row| LoginMaterial {
+            password: row.password,
+            opaque_registration: row.opaque_registration,
+        }))
+    }
+
+    /// Store a one-time registration invitation for an OPAQUE account.
+    pub async fn set_invite(
+        &self,
+        uid: i64,
+        token_hash: &str,
+        expires_at: NaiveDateTime,
+    ) -> ApiResult<u64> {
+        let result = sqlx::query(
+            "UPDATE user SET invite_token_hash = ?, invite_expires_at = ? WHERE uid = ?",
+        )
+        .bind(token_hash)
+        .bind(expires_at)
+        .bind(uid)
+        .execute(self.mysql.pool())
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Consume an invitation and store the OPAQUE registration record.
+    ///
+    /// The invitation check and the write are a single statement, so a token
+    /// cannot be replayed by two concurrent registrations.
+    pub async fn consume_invite(
+        &self,
+        username: &str,
+        token_hash: &str,
+        registration: &[u8],
+    ) -> ApiResult<u64> {
+        let result = sqlx::query(
+            "UPDATE user              SET opaque_registration = ?, password = NULL,                  invite_token_hash = NULL, invite_expires_at = NULL              WHERE username = ? AND invite_token_hash = ? AND invite_expires_at > NOW()",
+        )
+        .bind(registration)
+        .bind(username)
+        .bind(token_hash)
+        .execute(self.mysql.pool())
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// Insert a user and copy the creator's groups in one transaction.
@@ -139,7 +193,7 @@ impl UserRepository {
         sqlx::query(INSERT_USER)
             .bind(record.uid)
             .bind(&record.username)
-            .bind(&record.password_hash)
+            .bind(record.password_hash.as_deref())
             .bind(&record.phone)
             .bind(&record.email)
             .bind(record.role)

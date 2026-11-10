@@ -30,6 +30,43 @@
 | 密码 | 全部改为 Argon2id | 旧 MD5 密码失效，需要重置 |
 | 目录 | Rust 在根目录，Python 移到 `legacy/python/` | 新老代码对照方便 |
 
+## 1.1 认证：Argon2id → OPAQUE（可选）
+
+在第 1 节「全部改为 Argon2id」的基础上，新增了 **OPAQUE（RFC 9807）** 作为推荐
+登录方式，由 `server.auth.mode` 控制：
+
+| mode | 行为 |
+|------|------|
+| `password` | 仅 Argon2id 密码登录（`POST /v1/api/auth`），与之前一致 |
+| `both` | OPAQUE 登录 + Argon2id 密码登录（种子/迁移账号用） |
+| `opaque` | 仅 OPAQUE；密码登录直接拒绝（`0015`） |
+
+模板默认 `both`：内置的 admin 账号仍带 Argon2id 哈希，可以先登录创建用户；新账号
+走邀请 + OPAQUE 注册，全部迁移完后把 `mode` 改成 `opaque` 即可关闭弱路径。
+
+**为什么值得切**
+
+- 密码不再离开客户端，服务端只存注册记录（`opaque_registration`）；
+- 拖库后无法离线爆破：攻击者还需要 `setup_file`（长期密钥，不在数据库里）；
+- 服务端单次登录成本从 ~14.8 ms 降到 ~0.23 ms（见 BENCHMARK）。
+
+**需要人工处理**
+
+1. `setup_file`（默认 `config/opaque_server_setup.bin`）在首次启动时自动生成，
+   **必须备份且不能提交**（已加入 `.gitignore`）。丢失它会让所有 OPAQUE 账号失效。
+2. 建表需要新增三列（`opaque_registration`、`invite_token_hash`、
+   `invite_expires_at`），并把 `password` 改为可空；见 `mysql/create_database.sql`。
+3. 客户端要改用 OPAQUE 协议（`@serenity-kit/opaque` 或 `examples/opaque_client.rs`）。
+4. `invite_token` 只在创建用户时返回一次；管理员需要把它安全地交给用户。
+
+**已知取舍**
+
+- 第二轮登录的 `session` 是无状态加密串，默认 120 秒有效；在有效期内重放同一对
+  `session` + `credential_finalization` 可以再次换到 token（等价于 token 被窃取）。
+  需要严格一次性时可加 Redis nonce 表，当前实现选择「无状态 + 短 TTL」。
+- 未知用户名也返回合法的 `CredentialResponse`（OPAQUE 的假记录机制），不会泄露
+  账号是否存在。
+
 ## 2. 保持不变
 
 - 四层组件与注入链：Controller → Service → Repository → Datasource；

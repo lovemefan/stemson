@@ -166,3 +166,35 @@ taskset -c 1-31 ./target/release/examples/loadgen \
   1. 安装 `cryptography`（PyMySQL 连 MySQL 8 的 `caching_sha2_password` 需要）；
   2. 配置里补顶层 `http.port`（原 `app.py` 读的是 `http.port` 而不是 `server.http.port`）；
   3. 关闭 `ACCESS_LOG`。
+
+## 8. 登录：OPAQUE 与 Argon2id 的差距
+
+上表里的登录场景是 Argon2id（`m=19 MiB, t=2`）。换成 OPAQUE 后，服务端只做一次
+OPRF 和一次密钥交换校验，客户端承担 Argon2 KSF。
+
+**单核、进程内测量**（`cargo run --release --example opaque_cost`）：
+
+| 步骤 | 单次成本 |
+|------|----------|
+| OPAQUE `login/start`（OPRF + 会话加密） | 229 µs |
+| OPAQUE `login/finish`（MAC 校验 + 签发 JWT） | 2 µs |
+| **OPAQUE 合计** | **231 µs** |
+| Argon2id 校验 | 14,788 µs |
+| Argon2id 生成哈希 | 13,266 µs |
+
+即单核登录容量从 **68 次/秒** 提升到 **约 4,300 次/秒**（约 64 倍），而安全属性
+更强：密码不出客户端，拖库后没有 `setup_file` 无法离线爆破。
+
+**HTTP 层（单 P-core，c=32）**：
+
+| 端点 | RPS | p50 | p99 |
+|------|-----|-----|-----|
+| `POST /v1/api/auth/login/start` | 5,668 | 5.61 ms | 7.56 ms |
+| `POST /v1/api/auth/login/finish` | 8,450 | 3.63 ms | 5.92 ms |
+
+一次完整登录需要两轮，按串联估算单核约 **3,400 次登录/秒**；作为对比，Argon2id
+密码登录在同样条件下是 **63 次/秒**（p99 697 ms）。这里的 HTTP 数字复用了预先
+构造的合法消息，只衡量服务端计算，不含客户端 Argon2。
+
+**代价**：客户端（浏览器）仍要花 ~16 ms 做 KSF，所以单次登录的端到端时延主要由
+客户端 CPU 决定；服务端容量则提升两个数量级。这正是 aPAKE 的设计意图。
