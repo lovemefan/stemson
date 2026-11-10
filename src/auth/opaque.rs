@@ -247,10 +247,22 @@ impl OpaqueAuth {
     }
 }
 
+/// Accept both base64url and standard base64, with or without padding:
+/// JavaScript clients (`@serenity-kit/opaque`) and Rust clients disagree on the
+/// alphabet, and the protocol messages are opaque bytes.
 fn decode(input: &str) -> ApiResult<Vec<u8>> {
-    URL_SAFE_NO_PAD
-        .decode(input.trim())
-        .map_err(|_| ApiError::invalid_parameter("expected base64url data"))
+    let trimmed = input.trim();
+    for engine in [
+        &URL_SAFE_NO_PAD,
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        &base64::engine::general_purpose::URL_SAFE,
+        &base64::engine::general_purpose::STANDARD,
+    ] {
+        if let Ok(bytes) = engine.decode(trimmed) {
+            return Ok(bytes);
+        }
+    }
+    Err(ApiError::invalid_parameter("expected base64 data"))
 }
 
 fn restrict_permissions(path: &Path) -> std::io::Result<()> {
@@ -369,6 +381,15 @@ mod tests {
         let start = auth.login_start("nobody", None, &request).unwrap();
         assert!(!start.response.is_empty());
         assert!(!start.session.is_empty());
+    }
+
+    #[test]
+    fn accepts_standard_and_url_safe_base64() {
+        let bytes = b"opaque-protocol-bytes";
+        let url = URL_SAFE_NO_PAD.encode(bytes);
+        let standard = base64::engine::general_purpose::STANDARD.encode(bytes);
+        assert_eq!(decode(&url).unwrap(), bytes);
+        assert_eq!(decode(&standard).unwrap(), bytes);
     }
 
     #[test]
