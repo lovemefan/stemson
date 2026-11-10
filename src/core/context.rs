@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn config_and_jwt_are_exposed() {
-        let dir = std::env::temp_dir().join(format!("sanicboot-ctx-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("stemson-ctx-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.yaml");
         std::fs::write(&path, "server:\n  jwt:\n    expires_in: 600\n").unwrap();

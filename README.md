@@ -1,7 +1,10 @@
-# SanicBoot · Rust / Axum 版
+# Stemson
 
-把 [lovemefan/SanicBoot](https://github.com/lovemefan/SanicBoot) 的 Python/Sanic 后端模板重构为
-**Rust + Axum**，保留原项目「像 Spring Boot 一样快速搭建 API 服务」的设计：
+> **Stemson**（船首内材）：从龙骨起、沿首柱向上，与内龙骨一起把船体连成整体的一根内衬材。
+> 这个项目就是给服务装这样一副骨架——把分层、约定与依赖注入贯穿始终。
+
+本项目把 [lovemefan/SanicBoot](https://github.com/lovemefan/SanicBoot) 的 Python/Sanic 后端模板
+重构为 **Rust + Axum**，并更名为 **Stemson**，保留原项目「像 Spring Boot 一样快速搭建 API 服务」的设计：
 
 - **YAML 配置**：点号取值（`server.http.port`）+ 文件热重载
 - **注解式依赖注入**：`#[derive(Autowired)]` 字段注入、`#[value("...")]` 配置注入
@@ -26,7 +29,7 @@ Python 原实现完整保留在 [`legacy/python/`](legacy/python)，可与新代
 mysql -uroot -p < mysql/create_database.sql
 ```
 
-脚本会创建 `sanic_backend_system` 库，并写入两个账号：
+脚本会创建 `stemson_backend_system` 库，并写入两个账号：
 
 | 账号 | 密码 | 角色 | identity |
 |------|------|------|----------|
@@ -40,7 +43,7 @@ mysql -uroot -p < mysql/create_database.sql
 - `config/config.docker.yaml`：docker-compose 使用
 
 数据库连接、JWT 密钥、端口都在这里改；**JWT 密钥建议用环境变量**
-`SANICBOOT_JWT_SECRET` 覆盖。
+`STEMSON_JWT_SECRET` 覆盖。
 
 ### 3. 运行
 
@@ -49,7 +52,7 @@ mysql -uroot -p < mysql/create_database.sql
 ./scripts/dev.sh
 
 # 或指定任意配置文件
-SANICBOOT_CONFIG=config/config.yaml cargo run
+STEMSON_CONFIG=config/config.yaml cargo run
 ```
 
 打开：
@@ -76,7 +79,7 @@ docker compose up --build      # Axum + MySQL + Redis，服务在 :8080
 
 ```
 Cargo.toml                 # 应用 crate（lib + bin）
-sanicboot-macros/          # 过程宏：#\[service] #\[controller] #\[validate] ...
+stemson-macros/          # 过程宏：#\[service] #\[controller] #\[validate] ...
 src/
   main.rs                  # 入口（对应 backend/app.py）
   app.rs                   # 路由装配、CORS、超时、panic/404 兜底
@@ -121,7 +124,7 @@ pub struct ArticleRow {
     pub title: String,
 }
 
-#[sanicboot::repository]
+#[stemson::repository]
 pub struct ArticleRepository {
     mysql: Arc<MysqlDataSource>,          // 自动注入同类型数据源
 }
@@ -140,7 +143,7 @@ impl ArticleRepository {
 
 ```rust
 // src/service/article_service.rs
-#[sanicboot::service]
+#[stemson::service]
 pub struct ArticleService {
     article_repository: Arc<ArticleRepository>,
 }
@@ -154,12 +157,12 @@ impl ArticleService {
 
 ```rust
 // src/controller/article_controller.rs
-#[derive(sanicboot::Autowired)]
+#[derive(stemson::Autowired)]
 pub struct ArticleController {
     article_service: Arc<ArticleService>,
 }
 
-#[sanicboot::controller("/v1/api/article")]
+#[stemson::controller("/v1/api/article")]
 impl ArticleController {
     #[get("/{id}")]
     async fn detail(&self, ctx: RequestContext) -> ApiResult<ApiResponse> {
@@ -182,7 +185,7 @@ impl ArticleController {
 cargo fmt --all                       # 格式化
 cargo clippy --all-targets -- -D warnings
 cargo test                            # 75 个单元/集成测试，无需数据库
-SANICBOOT_URL=http://127.0.0.1:8080 ./scripts/e2e-test.sh   # 真实 MySQL 端到端
+STEMSON_URL=http://127.0.0.1:8080 ./scripts/e2e-test.sh   # 真实 MySQL 端到端
 cargo run --example hash_password -- <password>             # 生成 Argon2 哈希
 ```
 

@@ -35,11 +35,11 @@ impl Config {
         }))
     }
 
-    /// Load the configuration path from `SANICBOOT_CONFIG` or the default
+    /// Load the configuration path from `STEMSON_CONFIG` or the default
     /// `config/config.yaml`.
     pub fn load_default() -> anyhow::Result<Arc<Self>> {
         let path =
-            std::env::var("SANICBOOT_CONFIG").unwrap_or_else(|_| "config/config.yaml".to_string());
+            std::env::var("STEMSON_CONFIG").unwrap_or_else(|_| "config/config.yaml".to_string());
         Self::load(path)
     }
 
@@ -171,7 +171,7 @@ impl Config {
             .ok_or_else(|| anyhow!("config path has no file name"))?;
 
         let handle = std::thread::Builder::new()
-            .name("sanicboot-config-watch".to_string())
+            .name("stemson-config-watch".to_string())
             .spawn(move || {
                 let mut last_reload = std::time::Instant::now();
                 for event in rx {
@@ -264,7 +264,7 @@ mod tests {
             pub fn new() -> Self {
                 let mut path = std::env::temp_dir();
                 let unique = format!(
-                    "sanicboot-test-{}-{}",
+                    "stemson-test-{}-{}",
                     std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -290,7 +290,7 @@ mod tests {
 
     const SAMPLE: &str = r#"
 server:
-  name: sanic_backend
+  name: stemson_backend
   http:
     port: 8080
   log:
@@ -306,7 +306,7 @@ datasource:
     fn dotted_lookup_matches_python_semantics() {
         let (_dir, config) = write_config(SAMPLE);
         assert_eq!(config.i64("server.http.port", 0), 8080);
-        assert_eq!(config.string("server.name", ""), "sanic_backend");
+        assert_eq!(config.string("server.name", ""), "stemson_backend");
         assert_eq!(config.string("server.missing", "fallback"), "fallback");
         assert!(config.bool("server.log.debug", false));
         assert_eq!(config.i64("datasource.mysql.port", 0), 3306);

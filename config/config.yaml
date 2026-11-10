@@ -1,11 +1,11 @@
-# SanicBoot configuration.
+# Stemson configuration (renamed from SanicBoot).
 #
 # Dotted keys are read anywhere in the code, e.g. `server.http.port`, exactly
 # like the Python implementation. Changes to this file are hot reloaded unless
 # `server.config_watch` is false.
 server:
   # name of project
-  name: sanic_backend
+  name: stemson_backend
   http:
     host: 0.0.0.0
     port: 80
@@ -14,7 +14,7 @@ server:
     # request timeout in seconds, 0 disables it
     request_timeout: 30
 
-  # JWT settings. Prefer the SANICBOOT_JWT_SECRET environment variable in
+  # JWT settings. Prefer the STEMSON_JWT_SECRET environment variable in
   # production; the value here is only a development default.
   jwt:
     secret: "change-me-in-production"
@@ -46,7 +46,7 @@ server:
 
 datasource:
   mysql:
-    db_name: sanic_backend_system
+    db_name: stemson_backend_system
     host: 127.0.0.1
     user: root
     password: ""

@@ -33,7 +33,7 @@ datasource:
     port: 3306
     user: root
     password: ""
-    db_name: sanic_backend_system
+    db_name: stemson_backend_system
     max_usage: 5
 redis:
   host: 127.0.0.1
@@ -132,7 +132,7 @@ impl Drop for TestContext {
 
 fn unique_directory() -> PathBuf {
     let unique = format!(
-        "sanicboot-test-{}-{}",
+        "stemson-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

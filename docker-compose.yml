@@ -6,7 +6,7 @@ services:
       - "8080:8080"
     environment:
       # Override the development secret from config.docker.yaml.
-      SANICBOOT_JWT_SECRET: "please-change-this-secret"
+      STEMSON_JWT_SECRET: "please-change-this-secret"
     depends_on:
       mysql:
         condition: service_healthy
@@ -18,9 +18,9 @@ services:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: sanic_backend_system
-      MYSQL_USER: sanicboot
-      MYSQL_PASSWORD: sanicboot
+      MYSQL_DATABASE: stemson_backend_system
+      MYSQL_USER: stemson
+      MYSQL_PASSWORD: stemson
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_bin

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # End-to-end check against a running server and a real MySQL.
 #
-#   SANICBOOT_URL=http://127.0.0.1:19090 scripts/e2e-test.sh
+#   STEMSON_URL=http://127.0.0.1:19090 scripts/e2e-test.sh
 #
 # Requires the schema from mysql/create_database.sql (seed users admin/admin123
 # and lovemefan/lovemefan123).
 set -euo pipefail
 
-BASE_URL="${SANICBOOT_URL:-http://127.0.0.1:8080}"
+BASE_URL="${STEMSON_URL:-http://127.0.0.1:8080}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 NEW_USER="test_$(date +%s)"

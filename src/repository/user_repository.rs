@@ -86,7 +86,7 @@ INSERT INTO group_user (gid, uid)
 SELECT gid, ? FROM group_user WHERE uid = ?";
 
 /// `@Repository`
-#[sanicboot_macros::repository]
+#[stemson_macros::repository]
 pub struct UserRepository {
     mysql: Arc<MysqlDataSource>,
 }

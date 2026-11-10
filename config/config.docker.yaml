@@ -1,6 +1,6 @@
 # Configuration used by docker-compose.yml (hostnames resolve inside the network).
 server:
-  name: sanic_backend
+  name: stemson_backend
   http:
     host: 0.0.0.0
     port: 8080
@@ -25,10 +25,10 @@ server:
 
 datasource:
   mysql:
-    db_name: sanic_backend_system
+    db_name: stemson_backend_system
     host: mysql
-    user: sanicboot
-    password: sanicboot
+    user: stemson
+    password: stemson
     port: 3306
     max_usage: 100
     acquire_timeout: 10

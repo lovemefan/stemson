@@ -44,7 +44,7 @@ pub struct UpdateUserCommand {
 }
 
 /// `@Service`
-#[sanicboot_macros::service]
+#[stemson_macros::service]
 pub struct UserService {
     user_repository: Arc<UserRepository>,
 }

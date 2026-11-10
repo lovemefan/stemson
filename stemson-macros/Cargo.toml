@@ -1,8 +1,8 @@
 [package]
-name = "sanicboot-macros"
+name = "stemson-macros"
 version = "2.0.0"
 edition = "2021"
-description = "Procedural macros for sanicboot (#[service], #[repository], #[datasource], #[controller], derive(Autowired), #[validate])"
+description = "Procedural macros for stemson (#[service], #[repository], #[datasource], #[controller], derive(Autowired), #[validate])"
 license = "MIT"
 
 [lib]

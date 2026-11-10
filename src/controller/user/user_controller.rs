@@ -93,12 +93,12 @@ pub struct ModifyUserRequest {
 }
 
 /// `POST /user/user_controller/validate_password`
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct ValidatePassword {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller]
+#[stemson_macros::controller]
 impl ValidatePassword {
     /// Check a username/password pair without issuing a token.
     #[post]
@@ -125,12 +125,12 @@ impl ValidatePassword {
 }
 
 /// `POST /user/user_controller/add_user`
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct AddUser {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller]
+#[stemson_macros::controller]
 impl AddUser {
     /// Create a user. Requires an administrator.
     #[post]
@@ -180,12 +180,12 @@ impl AddUser {
 }
 
 /// `POST /user/user_controller/get_user_info`
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct GetUserInfo {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller]
+#[stemson_macros::controller]
 impl GetUserInfo {
     /// Look up a single user. Requires an administrator.
     #[post]
@@ -206,12 +206,12 @@ impl GetUserInfo {
 }
 
 /// `POST /user/user_controller/delete_user`
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct DeleteUser {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller]
+#[stemson_macros::controller]
 impl DeleteUser {
     /// Delete a user. Requires an administrator.
     #[post]
@@ -232,12 +232,12 @@ impl DeleteUser {
 }
 
 /// `POST /user/user_controller/modify_user`
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct ModifyUser {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller]
+#[stemson_macros::controller]
 impl ModifyUser {
     /// Modify a user. Requires an administrator.
     #[post]
@@ -280,12 +280,12 @@ impl ModifyUser {
 
 /// `POST /getall` — the explicit path of the original
 /// `@Controller("/getall")` declaration.
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct GetAllInfo {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller("/getall")]
+#[stemson_macros::controller("/getall")]
 impl GetAllInfo {
     /// List every user. Requires an administrator identity.
     #[post]

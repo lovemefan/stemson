@@ -103,7 +103,7 @@ impl From<Option<i64>> for SqlParam {
 }
 
 /// `@Datasource("mysql")`
-#[sanicboot_macros::datasource("mysql")]
+#[stemson_macros::datasource("mysql")]
 pub struct MysqlDataSource {
     config: Arc<Config>,
     #[skip]

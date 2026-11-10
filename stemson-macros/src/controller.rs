@@ -45,13 +45,13 @@ impl Verb {
 
     fn http_method(self) -> TokenStream2 {
         match self {
-            Verb::Get => quote!(::sanicboot::http::Method::GET),
-            Verb::Post => quote!(::sanicboot::http::Method::POST),
-            Verb::Put => quote!(::sanicboot::http::Method::PUT),
-            Verb::Delete => quote!(::sanicboot::http::Method::DELETE),
-            Verb::Patch => quote!(::sanicboot::http::Method::PATCH),
-            Verb::Head => quote!(::sanicboot::http::Method::HEAD),
-            Verb::Options => quote!(::sanicboot::http::Method::OPTIONS),
+            Verb::Get => quote!(::stemson::http::Method::GET),
+            Verb::Post => quote!(::stemson::http::Method::POST),
+            Verb::Put => quote!(::stemson::http::Method::PUT),
+            Verb::Delete => quote!(::stemson::http::Method::DELETE),
+            Verb::Patch => quote!(::stemson::http::Method::PATCH),
+            Verb::Head => quote!(::stemson::http::Method::HEAD),
+            Verb::Options => quote!(::stemson::http::Method::OPTIONS),
         }
     }
 }
@@ -213,7 +213,7 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
         routes.push(Route {
             verb,
             suffix: suffix.map(|lit| lit.value()),
-            handler: format!("__sanicboot_route_{}_{}", registry_name, routes.len()),
+            handler: format!("__stemson_route_{}_{}", registry_name, routes.len()),
             method: cleaned,
             validation,
             protected,
@@ -235,48 +235,48 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
         let method = &route.method.sig.ident;
         let validation = expand_validation(&route.validation);
         let protected = if route.protected {
-            quote!(__sanicboot_ctx.require_auth()?;)
+            quote!(__stemson_ctx.require_auth()?;)
         } else {
             quote!()
         };
         let authority = match &route.authority {
             Some(identities) => quote! {
-                __sanicboot_ctx.require_identity(&[#(#identities),*])?;
+                __stemson_ctx.require_identity(&[#(#identities),*])?;
             },
             None => quote!(),
         };
 
         quote! {
             async fn #handler(
-                ::sanicboot::axum::extract::State(__sanicboot_state): ::sanicboot::axum::extract::State<
-                    ::sanicboot::core::state::AppState,
+                ::stemson::axum::extract::State(__stemson_state): ::stemson::axum::extract::State<
+                    ::stemson::core::state::AppState,
                 >,
-                __sanicboot_request: ::sanicboot::axum::extract::Request,
-            ) -> ::sanicboot::axum::response::Response {
-                let __sanicboot_result: ::sanicboot::exception::ApiResult<
-                    ::sanicboot::model::response::ApiResponse,
+                __stemson_request: ::stemson::axum::extract::Request,
+            ) -> ::stemson::axum::response::Response {
+                let __stemson_result: ::stemson::exception::ApiResult<
+                    ::stemson::model::response::ApiResponse,
                 > = async move {
-                    let __sanicboot_ctx =
-                        ::sanicboot::request::context::RequestContext::from_request(
-                            &__sanicboot_state,
-                            __sanicboot_request,
+                    let __stemson_ctx =
+                        ::stemson::request::context::RequestContext::from_request(
+                            &__stemson_state,
+                            __stemson_request,
                         )
                         .await?;
                     #protected
                     #authority
                     #validation
-                    let __sanicboot_controller =
-                        __sanicboot_state.ctx().resolve::<#self_ty>()?;
-                    #self_ty::#method(&*__sanicboot_controller, __sanicboot_ctx).await
+                    let __stemson_controller =
+                        __stemson_state.ctx().resolve::<#self_ty>()?;
+                    #self_ty::#method(&*__stemson_controller, __stemson_ctx).await
                 }
                 .await;
 
-                match __sanicboot_result {
+                match __stemson_result {
                     ::std::result::Result::Ok(value) => {
-                        ::sanicboot::axum::response::IntoResponse::into_response(value)
+                        ::stemson::axum::response::IntoResponse::into_response(value)
                     }
                     ::std::result::Result::Err(error) => {
-                        ::sanicboot::axum::response::IntoResponse::into_response(error)
+                        ::stemson::axum::response::IntoResponse::into_response(error)
                     }
                 }
             }
@@ -304,7 +304,7 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
             .collect();
         let first_verb = routes[indices[0]].verb.routing_fn();
         let first_handler = &handler_idents[0];
-        let mut method_router = quote!(::sanicboot::axum::routing::#first_verb(#first_handler));
+        let mut method_router = quote!(::stemson::axum::routing::#first_verb(#first_handler));
         for (route_index, handler) in indices.iter().zip(handler_idents.iter()).skip(1) {
             let verb = routes[*route_index].verb.routing_fn();
             method_router = quote!(#method_router.#verb(#handler));
@@ -316,7 +316,7 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
         };
         route_builders.push(quote! {
             {
-                let route_path = ::sanicboot::core::route::join_path(&base_path, #suffix_expr);
+                let route_path = ::stemson::core::route::join_path(&base_path, #suffix_expr);
                 router = router.route(&route_path, #method_router);
             }
         });
@@ -329,8 +329,8 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
             None => quote!(::core::option::Option::None),
         };
         quote! {
-            ::sanicboot::core::route::RouteEntry::new(
-                ::sanicboot::core::route::join_path(&base_path, #suffix_expr),
+            ::stemson::core::route::RouteEntry::new(
+                ::stemson::core::route::join_path(&base_path, #suffix_expr),
                 #verb,
                 #registry_name,
             )
@@ -342,8 +342,8 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
         None => quote!(::core::option::Option::None),
     };
 
-    let build_fn = format_ident!("__sanicboot_build_{}", registry_name);
-    let cast_fn = format_ident!("__sanicboot_as_controller_{}", registry_name);
+    let build_fn = format_ident!("__stemson_build_{}", registry_name);
+    let cast_fn = format_ident!("__stemson_as_controller_{}", registry_name);
     let doc = format!("Builds the controller `{struct_ident}` at startup.");
 
     let cleaned_impl = {
@@ -357,13 +357,13 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
 
         #(#handlers)*
 
-        impl ::sanicboot::model::controller::ControllerBase for #self_ty {
+        impl ::stemson::model::controller::ControllerBase for #self_ty {
             fn name(&self) -> &'static str {
                 #registry_name
             }
 
             fn base_path(&self) -> ::std::string::String {
-                ::sanicboot::core::route::derive_path(
+                ::stemson::core::route::derive_path(
                     ::core::module_path!(),
                     ::core::env!("CARGO_CRATE_NAME"),
                     ::core::stringify!(#struct_ident),
@@ -373,17 +373,17 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
 
             fn route_entries(
                 &self,
-            ) -> ::std::vec::Vec<::sanicboot::core::route::RouteEntry> {
+            ) -> ::std::vec::Vec<::stemson::core::route::RouteEntry> {
                 let base_path = self.base_path();
                 ::std::vec![#(#entries),*]
             }
 
             fn routes(
                 self: ::std::sync::Arc<Self>,
-            ) -> ::sanicboot::axum::Router<::sanicboot::core::state::AppState> {
+            ) -> ::stemson::axum::Router<::stemson::core::state::AppState> {
                 let base_path = self.base_path();
                 let mut router =
-                    ::sanicboot::axum::Router::<::sanicboot::core::state::AppState>::new();
+                    ::stemson::axum::Router::<::stemson::core::state::AppState>::new();
                 #(#route_builders)*
                 router
             }
@@ -391,30 +391,30 @@ fn expand(item: &ItemImpl, explicit: Option<LitStr>) -> syn::Result<TokenStream2
 
         #[doc = #doc]
         fn #build_fn(
-            ctx: &::sanicboot::core::context::AppContext,
-        ) -> ::anyhow::Result<::sanicboot::core::registry::ComponentValue> {
+            ctx: &::stemson::core::context::AppContext,
+        ) -> ::anyhow::Result<::stemson::core::registry::ComponentValue> {
             let value =
-                <#self_ty as ::sanicboot::core::registry::Autowire>::autowire(ctx)?;
+                <#self_ty as ::stemson::core::registry::Autowire>::autowire(ctx)?;
             ::std::result::Result::Ok(::std::sync::Arc::new(value))
         }
 
         #[doc = "Downcasts the built controller to the router abstraction."]
         fn #cast_fn(
-            value: ::sanicboot::core::registry::ComponentValue,
+            value: ::stemson::core::registry::ComponentValue,
         ) -> ::core::option::Option<
-            ::std::sync::Arc<dyn ::sanicboot::model::controller::ControllerBase>,
+            ::std::sync::Arc<dyn ::stemson::model::controller::ControllerBase>,
         > {
             let controller = value.downcast::<#self_ty>().ok()?;
             ::core::option::Option::Some(
                 controller
-                    as ::std::sync::Arc<dyn ::sanicboot::model::controller::ControllerBase>,
+                    as ::std::sync::Arc<dyn ::stemson::model::controller::ControllerBase>,
             )
         }
 
-        ::sanicboot::inventory::submit! {
-            ::sanicboot::core::registry::ComponentRegistration {
+        ::stemson::inventory::submit! {
+            ::stemson::core::registry::ComponentRegistration {
                 name: #registry_name,
-                kind: ::sanicboot::core::registry::ComponentKind::Controller,
+                kind: ::stemson::core::registry::ComponentKind::Controller,
                 type_name: ::core::stringify!(#self_ty),
                 build: #build_fn,
                 as_controller: ::core::option::Option::Some(#cast_fn),

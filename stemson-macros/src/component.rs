@@ -18,21 +18,21 @@ pub enum ComponentLayer {
 impl ComponentLayer {
     fn kind_tokens(self) -> TokenStream2 {
         match self {
-            ComponentLayer::Service => quote!(::sanicboot::core::registry::ComponentKind::Service),
+            ComponentLayer::Service => quote!(::stemson::core::registry::ComponentKind::Service),
             ComponentLayer::Repository => {
-                quote!(::sanicboot::core::registry::ComponentKind::Repository)
+                quote!(::stemson::core::registry::ComponentKind::Repository)
             }
             ComponentLayer::Datasource => {
-                quote!(::sanicboot::core::registry::ComponentKind::Datasource)
+                quote!(::stemson::core::registry::ComponentKind::Datasource)
             }
         }
     }
 
     fn marker_tokens(self) -> TokenStream2 {
         match self {
-            ComponentLayer::Service => quote!(::sanicboot::model::service::ServiceBase),
-            ComponentLayer::Repository => quote!(::sanicboot::model::repository::RepositoryBase),
-            ComponentLayer::Datasource => quote!(::sanicboot::model::datasource::DatasourceBase),
+            ComponentLayer::Service => quote!(::stemson::model::service::ServiceBase),
+            ComponentLayer::Repository => quote!(::stemson::model::repository::RepositoryBase),
+            ComponentLayer::Datasource => quote!(::stemson::model::datasource::DatasourceBase),
         }
     }
 
@@ -113,14 +113,14 @@ fn expand(
 
         #[doc = #build_doc]
         fn #build_fn(
-            ctx: &::sanicboot::core::context::AppContext,
-        ) -> ::anyhow::Result<::sanicboot::core::registry::ComponentValue> {
-            let value = <#name as ::sanicboot::core::registry::Autowire>::autowire(ctx)?;
+            ctx: &::stemson::core::context::AppContext,
+        ) -> ::anyhow::Result<::stemson::core::registry::ComponentValue> {
+            let value = <#name as ::stemson::core::registry::Autowire>::autowire(ctx)?;
             ::std::result::Result::Ok(::std::sync::Arc::new(value))
         }
 
-        ::sanicboot::inventory::submit! {
-            ::sanicboot::core::registry::ComponentRegistration {
+        ::stemson::inventory::submit! {
+            ::stemson::core::registry::ComponentRegistration {
                 name: #registry_name,
                 kind: #kind,
                 type_name: ::core::stringify!(#name),

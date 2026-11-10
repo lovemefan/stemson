@@ -1,4 +1,4 @@
-# SanicBoot → Axum 重构方案
+# SanicBoot → Stemson 重构方案
 
 > 目标：用 Rust + Axum 重写 SanicBoot，**保留原有功能与设计风格**（Spring Boot 式的
 > 约定优于配置、注册表 + 依赖注入、装饰器式校验、统一响应体），同时对原实现中明显不合理
@@ -34,8 +34,8 @@
 ## 2. 目标目录结构（一一对应）
 
 ```
-Cargo.toml                     # 根 crate：sanicboot（lib + bin）
-sanicboot-macros/              # 过程宏 crate（对应“装饰器”）
+Cargo.toml                     # 根 crate：stemson（lib + bin）
+stemson-macros/              # 过程宏 crate（对应“装饰器”）
 src/
   main.rs                      # 原 backend/app.py：启动、中间件、全局错误处理
   lib.rs                       # 模块导出

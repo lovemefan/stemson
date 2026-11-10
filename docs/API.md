@@ -228,7 +228,7 @@ GET /health
 ```
 
 ```json
-{"message":"success","data":{"status":"ok","name":"sanic_backend","uptime_seconds":12,"components":11},"code":"0000"}
+{"message":"success","data":{"status":"ok","name":"stemson_backend","uptime_seconds":12,"components":11},"code":"0000"}
 ```
 
 进程存活即 200；MySQL/Redis 不可用不影响该探针（数据源懒连接）。

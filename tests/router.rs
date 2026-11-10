@@ -5,8 +5,8 @@ mod common;
 
 use axum::http::{Method, StatusCode};
 use common::TestApp;
-use sanicboot::UserIdentity;
 use serde_json::json;
+use stemson::UserIdentity;
 
 #[tokio::test]
 async fn routes_match_the_paths_of_the_python_original() {
@@ -48,7 +48,7 @@ async fn every_documented_path_exists_in_the_router() {
         .map(|entry| entry.path)
         .collect::<std::collections::BTreeSet<_>>();
 
-    let document = sanicboot::openapi::ApiDoc::openapi();
+    let document = stemson::openapi::ApiDoc::openapi();
     let documented = document.paths.paths.keys().cloned().collect::<Vec<_>>();
     assert!(!documented.is_empty(), "the OpenAPI document is empty");
     for path in documented {
@@ -242,6 +242,6 @@ async fn openapi_json_is_served() {
     let app = TestApp::new();
     let (status, body) = app.get("/openapi.json", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["info"]["title"], "SanicBoot API");
+    assert_eq!(body["info"]["title"], "Stemson API");
     assert!(body["paths"]["/v1/api/auth"]["post"].is_object());
 }

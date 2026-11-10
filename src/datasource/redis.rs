@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::exception::{ApiError, ApiResult};
 
 /// `@Datasource("redis")`
-#[sanicboot_macros::datasource("redis")]
+#[stemson_macros::datasource("redis")]
 pub struct RedisDataSource {
     config: Arc<Config>,
     #[skip]

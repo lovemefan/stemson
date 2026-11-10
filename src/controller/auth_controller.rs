@@ -37,12 +37,12 @@ pub struct TokenResponse {
 }
 
 /// `/v1/api/auth`
-#[derive(sanicboot_macros::Autowired)]
+#[derive(stemson_macros::Autowired)]
 pub struct AuthController {
     user_service: Arc<UserService>,
 }
 
-#[sanicboot_macros::controller("/v1/api/auth")]
+#[stemson_macros::controller("/v1/api/auth")]
 impl AuthController {
     /// Exchange a username and password for a JWT.
     #[post]

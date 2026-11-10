@@ -105,8 +105,8 @@ pub fn join_path(base: &str, suffix: Option<&str>) -> String {
 /// `<crate>::controller`.
 ///
 /// ```text
-/// module_path!() = "sanicboot::controller::user::user_controller"
-/// crate_name     = "sanicboot"
+/// module_path!() = "stemson::controller::user::user_controller"
+/// crate_name     = "stemson"
 /// struct         = "AddUser"
 /// => "/user/user_controller/add_user"
 /// ```
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn derives_the_same_paths_as_the_python_prototype() {
-        let module = "sanicboot::controller::user::user_controller";
+        let module = "stemson::controller::user::user_controller";
         for (class, expected) in [
             (
                 "ValidatePassword",
@@ -155,7 +155,7 @@ mod tests {
             ("ModifyUser", "/user/user_controller/modify_user"),
             ("GetAllInfo", "/user/user_controller/get_all_info"),
         ] {
-            assert_eq!(derive_path(module, "sanicboot", class, None), expected);
+            assert_eq!(derive_path(module, "stemson", class, None), expected);
         }
     }
 
@@ -168,13 +168,13 @@ mod tests {
 
     #[test]
     fn explicit_paths_win() {
-        let module = "sanicboot::controller::user::user_controller";
+        let module = "stemson::controller::user::user_controller";
         assert_eq!(
-            derive_path(module, "sanicboot", "GetAllInfo", Some("/getall")),
+            derive_path(module, "stemson", "GetAllInfo", Some("/getall")),
             "/getall"
         );
         assert_eq!(
-            derive_path(module, "sanicboot", "GetAllInfo", Some("getall/")),
+            derive_path(module, "stemson", "GetAllInfo", Some("getall/")),
             "/getall"
         );
     }

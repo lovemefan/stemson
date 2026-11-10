@@ -11,14 +11,14 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
-use sanicboot::core::context::AppContext;
-use sanicboot::core::state::AppState;
 use serde_json::Value;
+use stemson::core::context::AppContext;
+use stemson::core::state::AppState;
 use tower::ServiceExt;
 
 const CONFIG: &str = r#"
 server:
-  name: sanic_backend
+  name: stemson_backend
   http:
     request_max_size: 1048576
     request_timeout: 30
@@ -35,7 +35,7 @@ datasource:
     port: 3306
     user: root
     password: ""
-    db_name: sanic_backend_system
+    db_name: stemson_backend_system
     max_usage: 2
     acquire_timeout: 1
 redis:
@@ -54,7 +54,7 @@ impl TestApp {
     /// Boot the application with a throwaway configuration file.
     pub fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "sanicboot-it-{}-{}",
+            "stemson-it-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -65,10 +65,10 @@ impl TestApp {
         let path = directory.join("config.yaml");
         std::fs::write(&path, CONFIG).expect("write config");
 
-        let config = sanicboot::Config::load(&path).expect("load config");
+        let config = stemson::Config::load(&path).expect("load config");
         let context = AppContext::new(config);
         context.build_components().expect("build components");
-        let router = sanicboot::build_router(AppState::new(Arc::clone(&context)));
+        let router = stemson::build_router(AppState::new(Arc::clone(&context)));
 
         Self {
             directory,
@@ -93,7 +93,7 @@ impl TestApp {
         user_id: i64,
         username: &str,
         role: i32,
-        identity: sanicboot::UserIdentity,
+        identity: stemson::UserIdentity,
     ) -> String {
         self.context
             .jwt()

@@ -2,5 +2,5 @@
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    sanicboot::run().await
+    stemson::run().await
 }

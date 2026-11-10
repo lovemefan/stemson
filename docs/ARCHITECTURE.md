@@ -40,7 +40,7 @@ inventory::submit! {
         name: "user_service",
         kind: ComponentKind::Service,
         type_name: "UserService",
-        build: __sanicboot_build_user_service,
+        build: __stemson_build_user_service,
         as_controller: None,
     }
 }
@@ -136,7 +136,7 @@ HTTP 方法由 `#[get]` `#[post]` `#[put]` `#[delete]` `#[patch]` `#[head]` `#[o
 以 `AddUser` 为例，宏生成的 handler 等价于：
 
 ```rust
-async fn __sanicboot_route_add_user_0(
+async fn __stemson_route_add_user_0(
     State(state): State<AppState>,
     request: Request,
 ) -> Response {

@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Cache dependency compilation separately from the sources.
 COPY Cargo.toml Cargo.lock ./
-COPY sanicboot-macros ./sanicboot-macros
+COPY stemson-macros ./stemson-macros
 COPY src ./src
 RUN cargo build --release --locked
 
@@ -15,9 +15,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=builder /app/target/release/sanicboot /usr/local/bin/sanicboot
+COPY --from=builder /app/target/release/stemson /usr/local/bin/stemson
 COPY config ./config
 
-ENV SANICBOOT_CONFIG=/app/config/config.docker.yaml
+ENV STEMSON_CONFIG=/app/config/config.docker.yaml
 EXPOSE 8080
-CMD ["sanicboot"]
+CMD ["stemson"]

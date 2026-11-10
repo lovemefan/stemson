@@ -33,11 +33,11 @@ pub enum Scope {
 impl Scope {
     fn tokens(self) -> TokenStream2 {
         match self {
-            Scope::All => quote!(::sanicboot::request::context::ParamScope::All),
-            Scope::Json => quote!(::sanicboot::request::context::ParamScope::Json),
-            Scope::Form => quote!(::sanicboot::request::context::ParamScope::Form),
-            Scope::Args => quote!(::sanicboot::request::context::ParamScope::Args),
-            Scope::Files => quote!(::sanicboot::request::context::ParamScope::Files),
+            Scope::All => quote!(::stemson::request::context::ParamScope::All),
+            Scope::Json => quote!(::stemson::request::context::ParamScope::Json),
+            Scope::Form => quote!(::stemson::request::context::ParamScope::Form),
+            Scope::Args => quote!(::stemson::request::context::ParamScope::Args),
+            Scope::Files => quote!(::stemson::request::context::ParamScope::Files),
         }
     }
 }
@@ -121,10 +121,10 @@ impl Rule {
             } => {
                 let mode = match mode {
                     PatternMode::Match => {
-                        quote!(::sanicboot::core::decorator::validate::PatternMode::Match)
+                        quote!(::stemson::core::decorator::validate::PatternMode::Match)
                     }
                     PatternMode::Search => {
-                        quote!(::sanicboot::core::decorator::validate::PatternMode::Search)
+                        quote!(::stemson::core::decorator::validate::PatternMode::Search)
                     }
                 };
                 quote! {
@@ -320,7 +320,7 @@ pub fn expand(specs: &[ValidateSpec]) -> TokenStream2 {
         let rules = spec.rules.iter().map(Rule::tokens);
         quote! {
             {
-                let mut v = __sanicboot_ctx.validator(#scope);
+                let mut v = __stemson_ctx.validator(#scope);
                 #(#rules)*
                 v.check()?;
             }

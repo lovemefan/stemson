@@ -1,7 +1,7 @@
-//! # sanicboot
+//! # stemson
 //!
 //! A Spring-Boot-like web framework on top of [Axum], ported from the Python
-//! SanicBoot project (`legacy/python`).
+//! SanicBoot project (`legacy/python`), released as **Stemson**.
 //!
 //! It keeps the original design:
 //!
@@ -16,13 +16,13 @@
 //! See `docs/ARCHITECTURE.md` for the mapping from the Python sources and
 //! `docs/MIGRATION.md` for every intentional behavioral difference.
 
-extern crate self as sanicboot;
+extern crate self as stemson;
 
 pub use axum;
 pub use http;
 pub use inventory;
 
-pub use sanicboot_macros::{controller, datasource, repository, service, Autowired};
+pub use stemson_macros::{controller, datasource, repository, service, Autowired};
 
 pub mod app;
 pub mod auth;

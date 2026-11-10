@@ -1,17 +1,17 @@
 [package]
-name = "sanicboot"
+name = "stemson"
 version = "2.0.0"
 edition = "2021"
 rust-version = "1.91"
-description = "Spring-Boot-like web framework on top of Axum (Rust port of SanicBoot)"
+description = "Stemson: a Spring-Boot-like web framework on top of Axum (Rust port of SanicBoot)"
 license = "MIT"
 readme = "README.md"
 
 [workspace]
-members = ["sanicboot-macros"]
+members = ["stemson-macros"]
 
 [dependencies]
-sanicboot-macros = { path = "sanicboot-macros" }
+stemson-macros = { path = "stemson-macros" }
 
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }

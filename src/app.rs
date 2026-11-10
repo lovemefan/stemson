@@ -45,7 +45,7 @@ pub async fn run() -> anyhow::Result<()> {
     context.build_components()?;
 
     tracing::info!(
-        name = %config.string("server.name", "sanic_backend"),
+        name = %config.string("server.name", "stemson_backend"),
         components = context.component_count(),
         controllers = context.controllers().len(),
         "application initialized"
@@ -164,7 +164,7 @@ fn cors_layer(config: &Config) -> CorsLayer {
 async fn health(State(state): State<AppState>) -> ApiResponse {
     ApiResponse::success(serde_json::json!({
         "status": "ok",
-        "name": state.config().string("server.name", "sanic_backend"),
+        "name": state.config().string("server.name", "stemson_backend"),
         "uptime_seconds": state.ctx().uptime().as_secs(),
         "components": state.ctx().component_count(),
     }))

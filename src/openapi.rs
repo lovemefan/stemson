@@ -177,7 +177,7 @@ fn doc_health() {}
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "SanicBoot API",
+        title = "Stemson API",
         version = "2.0.0",
         description = "Spring-Boot-like Axum template. Every response uses the \
                        `{message, data, code}` envelope described in `docs/API.md`."

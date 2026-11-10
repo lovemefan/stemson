@@ -3,6 +3,22 @@
 本文记录重构中**有意为之**的行为差异、需要人工处理的步骤和已知限制。
 逐项功能是否保留见 [REFACTOR_PLAN.md](REFACTOR_PLAN.md)。
 
+## 0. 项目改名
+
+原项目 **SanicBoot**（Python/Sanic）→ 本项目 **Stemson**（Rust/Axum）。
+
+| 旧 | 新 |
+|----|----|
+| crate `sanicboot` | `stemson` |
+| crate `sanicboot-macros` | `stemson-macros` |
+| 二进制 `sanicboot` | `stemson` |
+| 数据库 `sanic_backend_system` | `stemson_backend_system` |
+| `server.name: sanic_backend` | `stemson_backend` |
+| （Rust 版新增的）`SANICBOOT_CONFIG`、`SANICBOOT_JWT_SECRET` | `STEMSON_CONFIG`、`STEMSON_JWT_SECRET` |
+
+`legacy/python/` 里保留的是原 Python 项目，文件名、注释与文档仍叫 SanicBoot，
+这是有意为之的历史对照，不要跟着改。
+
 ## 1. 设计决策
 
 | 决策 | 选择 | 影响 |
@@ -147,7 +163,7 @@
 - 全局 panic 兜底 → `0016`，详情只进日志。
 - 路径参数：`#[get("/{id}")]` + `ctx.path_param("id")`。
 - 方法不允许、404 都返回统一响应体。
-- `server.jwt.secret` 支持 `SANICBOOT_JWT_SECRET` 环境变量覆盖。
+- `server.jwt.secret` 支持 `STEMSON_JWT_SECRET` 环境变量覆盖。
 - 路由表自检 + OpenAPI 一致性测试，防止文档与实现漂移。
 
 ## 6. 配置迁移
@@ -171,7 +187,7 @@
 1. **重建或升级数据库**：`password` 列加长到 `varchar(255)`，`identity` 默认值改为 3。
 2. **重置密码**：Argon2id 无法校验旧 MD5；用
    `cargo run --example hash_password -- <新密码>` 生成后更新，或让用户重置。
-3. **设置 JWT 密钥**：生产环境用 `SANICBOOT_JWT_SECRET`，不要用仓库里的默认值。
+3. **设置 JWT 密钥**：生产环境用 `STEMSON_JWT_SECRET`，不要用仓库里的默认值。
 4. **确认路由**：若调用方使用旧文档的 `/v1/api/user/...`，需要加显式路由或改客户端。
 5. **检查客户端对状态码的依赖**：业务判定改用 `code`。
 6. **CORS 白名单**：生产环境把 `server.cors.allowed_origins` 改成明确域名。
@@ -194,6 +210,6 @@
 - [ ] `cargo test` 通过（75 个测试）
 - [ ] 执行 `mysql/create_database.sql` 并确认种子账号能登录
 - [ ] 用 `scripts/e2e-test.sh` 跑通完整用户流程
-- [ ] 设置 `SANICBOOT_JWT_SECRET`
+- [ ] 设置 `STEMSON_JWT_SECRET`
 - [ ] 打开 `/swagger` 确认文档正确
 - [ ] 确认调用方路由与响应码判断

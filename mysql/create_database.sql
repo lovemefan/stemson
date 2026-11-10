@@ -1,6 +1,7 @@
 /*
 coding: utf-8
-Schema of the SanicBoot template, carried over from the Python project.
+Schema of the Stemson template (renamed from SanicBoot), carried over from the
+Python project.
 
 Changes compared to `legacy/python/mysql/create_database.sql`:
   * `user.password` is now `varchar(255)` because Argon2id hashes are ~96 bytes
@@ -21,9 +22,9 @@ Seed accounts:
     1.【强制】业务上具有唯一特性的字段,即使是组合字段,也必须建成唯一索引。
     2.【强制】在 varchar 字段上建立索引时,必须指定索引长度。
 */
-DROP DATABASE IF EXISTS `sanic_backend_system`;
-CREATE DATABASE `sanic_backend_system` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_bin;
-USE `sanic_backend_system`;
+DROP DATABASE IF EXISTS `stemson_backend_system`;
+CREATE DATABASE `stemson_backend_system` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_bin;
+USE `stemson_backend_system`;
 
 -- ------------
 --   用户相关表

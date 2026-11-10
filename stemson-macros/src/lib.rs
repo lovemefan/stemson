@@ -1,4 +1,4 @@
-//! Procedural macros for the `sanicboot` framework.
+//! Procedural macros for the `stemson` framework.
 //!
 //! | macro | Python counterpart |
 //! |-------|-------------------|
@@ -12,8 +12,8 @@
 //! | `#[protected]` method | `@protected` / `@inject_user` |
 //! | `#[authority([...])]` method | `@authority([...])` |
 //!
-//! All generated code refers to the framework as `::sanicboot`, so a crate
-//! using these macros only needs `sanicboot` (plus its re-exported `axum`) in
+//! All generated code refers to the framework as `::stemson`, so a crate
+//! using these macros only needs `stemson` (plus its re-exported `axum`) in
 //! scope.
 
 mod component;
@@ -94,9 +94,9 @@ fn expand_autowire(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let initializers = field_initializers(input)?;
     Ok(quote! {
-        impl ::sanicboot::core::registry::Autowire for #name {
+        impl ::stemson::core::registry::Autowire for #name {
             fn autowire(
-                ctx: &::sanicboot::core::context::AppContext,
+                ctx: &::stemson::core::context::AppContext,
             ) -> ::anyhow::Result<Self> {
                 ::std::result::Result::Ok(Self {
                     #(#initializers),*
@@ -199,7 +199,7 @@ fn is_config_type(ty: &Type) -> bool {
         .unwrap_or(false)
 }
 
-/// `CamelCase` → `snake_case`, matching `sanicboot::utils::text::to_snake_case`.
+/// `CamelCase` → `snake_case`, matching `stemson::utils::text::to_snake_case`.
 fn snake_case(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
     let mut out = String::with_capacity(name.len() + 4);
@@ -215,7 +215,7 @@ fn snake_case(name: &str) -> String {
 /// Unique identifier for generated items.
 fn unique_ident(prefix: &str, name: &Ident) -> Ident {
     Ident::new(
-        &format!("__sanicboot_{prefix}_{}", snake_case(&name.to_string())),
+        &format!("__stemson_{prefix}_{}", snake_case(&name.to_string())),
         name.span(),
     )
 }

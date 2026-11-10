@@ -13,7 +13,7 @@ fn main() {
         std::process::exit(2);
     }
     for password in passwords {
-        match sanicboot::utils::hash::hash_password(&password) {
+        match stemson::utils::hash::hash_password(&password) {
             Ok(hash) => println!("{password}\t{hash}"),
             Err(err) => eprintln!("{password}\tERROR: {err}"),
         }

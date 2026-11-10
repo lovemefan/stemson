@@ -20,7 +20,7 @@ use crate::config::Config;
 use crate::exception::{ApiError, ApiResult};
 use crate::model::identity::UserIdentity;
 
-/// JWT claims issued by sanicboot.
+/// JWT claims issued by stemson.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Primary key of the user (snowflake id).
@@ -95,11 +95,11 @@ impl std::fmt::Debug for JwtService {
 impl JwtService {
     /// Build the service from `server.jwt.*` configuration.
     ///
-    /// The secret can be overridden with `SANICBOOT_JWT_SECRET`, which is the
+    /// The secret can be overridden with `STEMSON_JWT_SECRET`, which is the
     /// recommended way to configure it in production.
     pub fn from_config(config: &Arc<Config>) -> Self {
-        let secret = std::env::var("SANICBOOT_JWT_SECRET")
-            .unwrap_or_else(|_| config.string("server.jwt.secret", "sanicboot-dev-secret"));
+        let secret = std::env::var("STEMSON_JWT_SECRET")
+            .unwrap_or_else(|_| config.string("server.jwt.secret", "stemson-dev-secret"));
         let ttl_seconds = config.i64("server.jwt.expires_in", 1800).max(60);
         Self::new(secret.as_bytes(), ttl_seconds)
     }
