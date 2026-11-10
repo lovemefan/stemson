@@ -1,0 +1,17 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# 本地工具链（不提交）
+.tools/
+
+# 运行时产物
+/logs/
+/config/config.local.yaml
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
