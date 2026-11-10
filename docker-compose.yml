@@ -1,0 +1,43 @@
+# Run the whole stack: Axum service + MySQL + Redis.
+services:
+  backend:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # Override the development secret from config.docker.yaml.
+      SANICBOOT_JWT_SECRET: "please-change-this-secret"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: sanic_backend_system
+      MYSQL_USER: sanicboot
+      MYSQL_PASSWORD: sanicboot
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+    volumes:
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+volumes:
+  mysql_data:
+  redis_data:

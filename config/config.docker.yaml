@@ -1,0 +1,40 @@
+# Configuration used by docker-compose.yml (hostnames resolve inside the network).
+server:
+  name: sanic_backend
+  http:
+    host: 0.0.0.0
+    port: 8080
+    request_max_size: 10485760
+    request_timeout: 30
+  jwt:
+    secret: "change-me-in-production"
+    expires_in: 1800
+  cors:
+    allowed_origins: ["*"]
+  snowflake:
+    datacenter_id: 1
+    worker_id: 2
+  log:
+    level: INFO
+    debug: false
+    format: "[%(asctime)s %(levelname)s ] [%(filename)s:%(lineno)d %(module)s.%(funcName)s] %(message)s"
+    filename: "logs/run.log"
+    backupCount: 10
+    maxBytes: 102400
+  config_watch: false
+
+datasource:
+  mysql:
+    db_name: sanic_backend_system
+    host: mysql
+    user: sanicboot
+    password: sanicboot
+    port: 3306
+    max_usage: 100
+    acquire_timeout: 10
+
+redis:
+  host: redis
+  port: 6379
+  db: 0
+  password: ""

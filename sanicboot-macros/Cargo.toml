@@ -1,0 +1,14 @@
+[package]
+name = "sanicboot-macros"
+version = "2.0.0"
+edition = "2021"
+description = "Procedural macros for sanicboot (#[service], #[repository], #[datasource], #[controller], derive(Autowired), #[validate])"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

@@ -22,6 +22,8 @@ jobs:
         os: [ubuntu-latest]
         python-version: ["3.11"]
     steps:
+      # Builds the Sphinx documentation of the original Python implementation
+      # (moved to legacy/python). Rust CI lives in ci.yml.
       # refer to https://github.com/actions/checkout
       - uses: actions/checkout@v2
         with:
@@ -38,9 +40,9 @@ jobs:
       - name: Build doc
         shell: bash
         run: |
-          export PYTHONPATH=$(pwd):${PYTHONPATH}
-          python -m pip install -r backend/requirements.txt
-          cd docs
+          export PYTHONPATH=$(pwd)/legacy/python:${PYTHONPATH}
+          python -m pip install -r legacy/python/backend/requirements.txt
+          cd legacy/python/docs
           python -m pip install -r ./requirements.txt
           make html
           touch build/html/.nojekyll
@@ -49,5 +51,5 @@ jobs:
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/build/html
+          publish_dir: ./legacy/python/docs/build/html
           publish_branch: gh-pages

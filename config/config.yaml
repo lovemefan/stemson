@@ -1,0 +1,63 @@
+# SanicBoot configuration.
+#
+# Dotted keys are read anywhere in the code, e.g. `server.http.port`, exactly
+# like the Python implementation. Changes to this file are hot reloaded unless
+# `server.config_watch` is false.
+server:
+  # name of project
+  name: sanic_backend
+  http:
+    host: 0.0.0.0
+    port: 80
+    # maximum accepted request body, in bytes (10 MiB)
+    request_max_size: 10485760
+    # request timeout in seconds, 0 disables it
+    request_timeout: 30
+
+  # JWT settings. Prefer the SANICBOOT_JWT_SECRET environment variable in
+  # production; the value here is only a development default.
+  jwt:
+    secret: "change-me-in-production"
+    # token lifetime in seconds
+    expires_in: 1800
+
+  cors:
+    # "*" reflects the original behavior; use an explicit list in production
+    allowed_origins: ["*"]
+
+  snowflake:
+    datacenter_id: 1
+    worker_id: 2
+
+  log:
+    level: INFO
+    debug: false
+    format: "[%(asctime)s %(levelname)s ] [%(filename)s:%(lineno)d %(module)s.%(funcName)s] %(message)s"
+    filename: "logs/run.log"
+    # rotation is time based (daily); this keeps the file count bounded
+    backupCount: 10
+    maxBytes: 102400
+
+  # watch config.yaml and hot reload it
+  config_watch: true
+
+# The component scan paths of the Python version (server.component.*) are gone:
+# Rust registers components at link time, see docs/MIGRATION.md.
+
+datasource:
+  mysql:
+    db_name: sanic_backend_system
+    host: 127.0.0.1
+    user: root
+    password: ""
+    port: 3306
+    # maximum number of pooled connections
+    max_usage: 100
+    # seconds to wait for a free connection
+    acquire_timeout: 10
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  db: 0
+  password: ""

@@ -1,0 +1,7 @@
+target/
+legacy/
+.tools/
+.git/
+logs/
+docs/
+*.md
