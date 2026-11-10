@@ -18,7 +18,7 @@ Python 原实现完整保留在 [`legacy/python/`](legacy/python)，可与新代
 
 ### 1. 准备
 
-- Rust 1.80+（`rustup` 安装即可）
+- Rust 1.91+（`rustup` 安装即可，仓库带 `rust-toolchain.toml`）
 - MySQL 8（可选，仅数据库相关接口需要）
 - Redis（可选，当前模板未在业务中使用）
 

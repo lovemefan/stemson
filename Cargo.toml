@@ -2,7 +2,7 @@
 name = "sanicboot"
 version = "2.0.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.91"
 description = "Spring-Boot-like web framework on top of Axum (Rust port of SanicBoot)"
 license = "MIT"
 readme = "README.md"

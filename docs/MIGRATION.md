@@ -185,6 +185,8 @@
 - `#[validate]` 的正则在每次请求时编译；如需极致性能可加入缓存。
 - multipart 上传会把文件读入内存（与原 Python 行为一致）。
 - Redis 目前只提供连接与基础命令，业务层未使用。
+- Docker 构建需要能拉取基础镜像 `rust:1.91-slim` 与 `debian:bookworm-slim`；
+  Swagger UI 静态资源已通过 `vendored` 特性内置，**不需要**再访问 GitHub。
 
 ## 9. 迁移检查清单
 
