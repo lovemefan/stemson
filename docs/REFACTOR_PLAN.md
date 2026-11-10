@@ -154,6 +154,60 @@ tests/                         # 集成测试
 9. **全局兜底异常把内部错误信息直接返回给客户端**（`exception.args[0]`）→ 建议对外
    返回通用消息 + 内部日志记录详情。
 
-## 6. 待确认决策
+## 6. 已确认的决策
 
-见对话中的 6 个问题（Q1–Q6）。已给出推荐项。
+| 编号 | 问题 | 结论 |
+|------|------|------|
+| Q1 | 依赖注入实现方式 | 完整还原：`inventory` 链接期自动注册 + 过程宏，新增组件不改中心注册代码 |
+| Q2 | 路由规则 | 保留自动推导（`/user/user_controller/add_user`），支持 `#[controller("/xxx")]` 与 `#[get("/sub")]` 覆盖 |
+| Q3 | 响应体与状态码 | `code` 统一为 4 位业务码；HTTP 状态码语义正确（400/401/403/404/409） |
+| Q4 | 数据访问 | 参数化查询，保留「Repository 声明 SQL、数据源自动执行」的写法 |
+| Q5 | 密码 | 全部改为 Argon2id（需重置旧密码） |
+| Q6 | 目录与交付 | Rust 在根目录，Python 移到 `legacy/python/`；交付工程 + 测试 + 文档 + Docker |
+
+## 7. 实施结果
+
+### 7.1 功能完成度（对应第 1 节）
+
+| # | 功能 | 状态 | 实现位置 |
+|---|------|------|----------|
+| 1 | YAML 点号配置 | 完成 | `src/config.rs` |
+| 2 | 配置热重载 | 完成（实测） | `Config::watch` + `arc-swap` |
+| 3 | `@Value` | 完成 | `#[value("...")]` 字段 + `core/component/value.rs` |
+| 4 | `@Autowired` | 完成 | `#[derive(Autowired)]` 字段注入 |
+| 5 | 自动发现/注册 | 完成 | `inventory` + 四个宏 |
+| 6 | 自动路由 | 完成（路径与原版逐条一致） | `core/route.rs` + `#[controller]` |
+| 7 | 6 个校验器 | 完成 | `core/decorator/validate.rs` + `#[validate(...)]` |
+| 8 | JWT 认证 | 完成（`jsonwebtoken`） | `src/auth.rs`、`controller/auth_controller.rs` |
+| 9 | `@authority` | 完成 | `#[authority([...])]` |
+| 10 | 统一响应体 | 完成 | `model/response.rs` |
+| 11 | 业务码 | 完成（16 个 + 新增 0017） | `model/status_code.rs` |
+| 12 | 全局异常处理 | 完成（含 404/405/timeout/panic） | `src/exception.rs`、`src/app.rs` |
+| 13 | CORS | 完成（可配置白名单） | `src/app.rs` |
+| 14 | MySQL 数据源 | 完成（参数化、事务、批量） | `datasource/mysql.rs` |
+| 15 | Redis | 完成（懒连接，基础命令） | `datasource/redis.rs` |
+| 16 | 雪花 ID | 完成（位布局一致） | `utils/snowflake.rs` |
+| 17 | 密码工具 | 改为 Argon2id | `utils/hash.rs` |
+| 18 | 日志 | 完成（颜色 + 文件轮转 + 模板解析） | `utils/logger.rs` |
+| 19 | Swagger | 完成（`utoipa`，静态资源内置） | `src/openapi.rs` |
+| 20 | 用户业务 | 完成（登录/增删改查/用户组） | `controller/`、`service/`、`repository/` |
+
+### 7.2 第 5 节建议的落地
+
+1. SQL 注入：已改为参数化查询，黑名单删除 ✅
+2. 密码：Argon2id（旧 MD5 不兼容，需重置） ✅
+3. HTTP 状态码：已修正 ✅
+4. `code` 混用：已统一 ✅
+5. `@Autowired` 的 `self` 限制：Rust 构造函数注入后消失 ✅
+6. 功能性 bug：`await`、`login` 的 uid 条件、`ValidatePassword` 未定义变量等已修 ✅
+7. 热重载边界：文档明确「仅取值型配置热生效」 ✅
+8. CORS：支持显式白名单 ✅
+9. 内部错误外泄：对外只返回通用消息，详情写日志 ✅
+
+### 7.3 验证
+
+- `cargo test`：75 个测试（60 单元 + 15 集成），不依赖数据库；
+- `cargo clippy --all-targets -- -D warnings`：零告警；
+- `scripts/e2e-test.sh`：对真实 MySQL 8 执行 23 项端到端检查，全部通过
+  （登录、鉴权、校验、增删改查、重复用户名、越权、删除后查询）；
+- 手工验证：配置热重载、Swagger UI、OpenAPI 文档、release 构建。
