@@ -16,3 +16,4 @@ Cargo.lock.orig
 .vscode/
 .DS_Store
 .smoke/
+.bench/

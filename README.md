@@ -187,6 +187,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test                            # 75 个单元/集成测试，无需数据库
 STEMSON_URL=http://127.0.0.1:8080 ./scripts/e2e-test.sh   # 真实 MySQL 端到端
 cargo run --example hash_password -- <password>             # 生成 Argon2 哈希
+scripts/benchmark.sh http://127.0.0.1:8080                   # 内置压测客户端
 ```
 
 ## 与原 Python 版的差异
@@ -207,6 +208,7 @@ cargo run --example hash_password -- <password>             # 生成 Argon2 哈�
 - [架构设计](docs/ARCHITECTURE.md)：分层、DI、路由推导、请求生命周期
 - [API 文档](docs/API.md)：接口、业务码、curl 示例
 - [迁移说明](docs/MIGRATION.md)：逐项差异、需要人工处理的步骤
+- [性能对比](docs/BENCHMARK.md)：与 Python 原版的实测吞吐/延迟
 - [重构方案](docs/REFACTOR_PLAN.md)：功能清单与设计取舍
 
 ## License
