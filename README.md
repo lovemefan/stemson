@@ -1,220 +1,229 @@
 # Stemson
 
-> **Stemson**（船首内材）：从龙骨起、沿首柱向上，与内龙骨一起把船体连成整体的一根内衬材。
-> 这个项目就是给服务装这样一副骨架——把分层、约定与依赖注入贯穿始终。
+Stemson 是基于 **Rust + Axum** 的 API 服务骨架：用宏声明组件和路由，在启动时完成依赖注入，让业务代码集中在接口、业务逻辑和数据访问上。
 
-本项目把 [lovemefan/SanicBoot](https://github.com/lovemefan/SanicBoot) 的 Python/Sanic 后端模板
-重构为 **Rust + Axum**，并更名为 **Stemson**，保留原项目「像 Spring Boot 一样快速搭建 API 服务」的设计：
+项目由 [SanicBoot](https://github.com/lovemefan/SanicBoot) 的 Python/Sanic 版本重构而来，保留 Spring Boot 式的分层和约定。迁移差异见[迁移说明](docs/MIGRATION.md)。
 
-- **YAML 配置**：点号取值（`server.http.port`）+ 文件热重载
-- **注解式依赖注入**：`#[derive(Autowired)]` 字段注入、`#[value("...")]` 配置注入
-- **自动发现 + 自动注册**：`#[service]` / `#[repository]` / `#[datasource("mysql")]` / `#[controller]`
-- **自动路由**：由模块路径推导，和 Python 版 `@Controller` 完全一致
-- **声明式参数校验**：`#[validate(...)]` 对应原来的 6 个校验装饰器
-- **JWT 鉴权**：`#[protected]` / `#[authority([...])]`
-- **OPAQUE 登录**：密码不出客户端，服务端单次登录成本 ~0.23 ms（可选，见
-  [认证方式](docs/API.md#36-opaque-登录推荐)）
-- **统一响应体**：`{ message, data, code }` + 4 位业务码
-- **数据源**：MySQL（参数化查询、事务、批量）、Redis
+## 它如何组织一个接口
 
-Python 原实现完整保留在 [`legacy/python/`](legacy/python)，可与新代码逐文件对照。
+```mermaid
+flowchart LR
+    H[HTTP 请求] --> C[Controller：参数与权限]
+    C --> S[Service：业务逻辑]
+    S --> R[Repository：SQL 与参数绑定]
+    R --> D[Datasource：数据库连接与执行]
+```
 
-## 快速开始
+你声明组件之间的依赖，例如 `user_repository: Arc<UserRepository>`；框架在启动时构造组件并注入字段。请求到来后，控制器调用已经构造好的服务。
 
-### 1. 准备
+| 能力 | 写法或行为 |
+|------|------------|
+| 组件注册与注入 | `#[service]`、`#[repository]`、`#[datasource("mysql")]`；字段按类型注入 |
+| HTTP 路由 | `#[controller("/path")]` + `#[get]` / `#[post]`；也支持从模块路径推导 |
+| 参数校验与权限 | `#[validate(...)]`、`#[protected]`、`#[authority([...])]` |
+| 配置 | YAML 点号取值、`#[value("key")]` 注入、文件热重载 |
+| 登录 | Argon2id 密码登录或 OPAQUE 协议登录，成功后均签发 JWT |
+| 数据与响应 | MySQL 参数化查询、事务和批量操作；Redis 基础命令；统一业务响应 `{ message, data, code }` |
 
-- Rust 1.91+（`rustup` 安装即可，仓库带 `rust-toolchain.toml`）
-- MySQL 8（可选，仅数据库相关接口需要）
-- Redis（可选，当前模板未在业务中使用）
+## 先跑起来
+
+以下命令均在仓库根目录执行。需要 Rust 1.91+；`rust-toolchain.toml` 使用 stable 工具链。
+
+### 1. 启动服务，验证 HTTP 链路
+
+```bash
+./scripts/dev.sh
+```
+
+脚本默认加载 `config/config.dev.yaml`，监听 **8080**。MySQL 和 Redis 都是懒连接，因此可以先不启动它们，验证健康检查、Swagger 和不访问数据库的接口。
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+预期返回 HTTP 200，响应中的 `data.status` 为 `"ok"`。这只说明服务进程可处理请求，不检查数据库连通性。
+
+- [Swagger UI](http://127.0.0.1:8080/swagger)：浏览和调用接口。
+- [OpenAPI JSON](http://127.0.0.1:8080/openapi.json)：机器可读的接口定义。
+
+### 2. 连接 MySQL，跑通登录
+
+用户和认证接口需要 MySQL 8。首次建库时执行：
 
 ```bash
 mysql -uroot -p < mysql/create_database.sql
 ```
 
-脚本会创建 `stemson_backend_system` 库，并写入两个账号：
+然后在 `config/config.dev.yaml` 的 `datasource.mysql` 下设置主机、端口、用户名和密码，重启服务。脚本初始化的账号为：
 
-| 账号 | 密码 | 角色 | identity |
+| 账号 | 密码 | role | identity |
 |------|------|------|----------|
-| `admin` | `admin123` | 管理员 | 1（超级管理员） |
-| `lovemefan` | `lovemefan123` | 管理员 | 2（管理员） |
+| `admin` | `admin123` | 1（管理员） | 1（超级管理员） |
+| `lovemefan` | `lovemefan123` | 1（管理员） | 2（管理员） |
 
-### 2. 配置
-
-- `config/config.yaml`：默认配置（监听 80，生产模板）
-- `config/config.dev.yaml`：本地开发（监听 8080，日志 DEBUG，开热重载）
-- `config/config.docker.yaml`：docker-compose 使用
-
-数据库连接、JWT 密钥、端口都在这里改；**JWT 密钥建议用环境变量**
-`STEMSON_JWT_SECRET` 覆盖。登录方式由 `server.auth.mode` 决定：
-`both`（默认，兼容内置账号）/ `opaque`（仅 OPAQUE，推荐）/ `password`（仅密码）。
-切到 `opaque` 前请先备份 `config/opaque_server_setup.bin`。
-
-### 3. 运行
-
-```bash
-# 本地开发（8080）
-./scripts/dev.sh
-
-# 或指定任意配置文件
-STEMSON_CONFIG=config/config.yaml cargo run
-```
-
-打开：
-
-- Swagger UI：<http://127.0.0.1:8080/swagger>
-- OpenAPI JSON：<http://127.0.0.1:8080/openapi.json>
-- 健康检查：<http://127.0.0.1:8080/health>
+开发配置的 `server.auth.mode` 为 `both`，可以先用种子账号进行密码登录：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/api/auth \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}'
-
-# {"message":"success","data":{"access_token":"...","token_type":"Bearer","expires_in":1800},"code":"0000"}
 ```
 
-### 4. Docker
+成功响应：
+
+```json
+{"message":"success","data":{"access_token":"...","token_type":"Bearer","expires_in":1800},"code":"0000"}
+```
+
+把 `access_token` 填入下一条请求：
 
 ```bash
-docker compose up --build      # Axum + MySQL + Redis，服务在 :8080
+curl http://127.0.0.1:8080/v1/api/auth/me \
+  -H 'Authorization: Bearer <access_token>'
 ```
 
-## 目录结构
+新用户的邀请注册和 OPAQUE 登录流程见 [API 文档](docs/API.md#3-认证先选登录方式再获取-jwt)。
 
-```
-Cargo.toml                 # 应用 crate（lib + bin）
-stemson-macros/          # 过程宏：#\[service] #\[controller] #\[validate] ...
-src/
-  main.rs                  # 入口（对应 backend/app.py）
-  app.rs                   # 路由装配、CORS、超时、panic/404 兜底
-  config.rs                # YAML 配置 + 点号取值 + 热重载
-  auth.rs                  # JWT 签发/校验、Claims
-  exception.rs             # ApiError（统一错误 + HTTP 状态码映射）
-  openapi.rs               # OpenAPI 文档 + Swagger UI
-  core/
-    registry.rs            # 组件注册表（inventory 链接期收集）
-    context.rs             # AppContext：四层构建、按类型/名字解析
-    route.rs               # 路由推导与路由表
-    state.rs               # Axum 共享状态
-    component/value.rs     # @Value 的等价实现
-    decorator/validate.rs  # 6 个参数校验器
-    decorator/authority.rs # 身份/权限校验
-  datasource/              # MySQL、Redis 数据源
-  model/                   # ApiResponse、StatusCode、User、UserIdentity、层标记 trait
-  request/context.rs       # RequestContext（json/form/args/path/files 解析）
-  repository/              # 数据访问（写 SQL、绑定参数）
-  service/                 # 业务逻辑
-  controller/              # HTTP 控制器（自动路由）
-config/                    # 三套配置
-mysql/create_database.sql  # 建库脚本（含 Argon2 种子密码）
-scripts/                   # dev.sh、e2e-test.sh
-tests/                     # 集成测试（无需数据库）
-legacy/python/             # 原 Python 实现（对照用）
-docs/                      # 架构、API、迁移说明
+### 也可以用 Docker 启动整套服务
+
+```bash
+docker compose up --build
 ```
 
-## 三分钟上手：新增一个接口
+Compose 会启动服务、MySQL 和 Redis，对外端口为 **8080**。MySQL 仅在数据卷首次初始化时运行建库脚本；已有数据卷的表结构升级需要单独处理。
 
-新增文件不需要改任何中心注册代码——宏在链接期自动注册组件。
+## 新增一个接口
+
+先做一个无需数据库的例子：`GET /hello/Ada` 返回问候语。只需声明一个 Service、一个 Controller，并让 Rust 编译这两个模块。
+
+**第一步：新增 `src/service/greeting_service.rs`。**
 
 ```rust
-// src/repository/article_repository.rs
-use std::sync::Arc;
-use sqlx::FromRow;
-
-#[derive(Debug, Clone, FromRow)]
-pub struct ArticleRow {
-    pub id: i64,
-    pub title: String,
-}
-
-#[stemson::repository]
-pub struct ArticleRepository {
-    mysql: Arc<MysqlDataSource>,          // 自动注入同类型数据源
-}
-
-impl ArticleRepository {
-    pub async fn find(&self, id: i64) -> ApiResult<Option<ArticleRow>> {
-        self.mysql
-            .fetch_optional(
-                sqlx::query_as::<_, ArticleRow>("SELECT id, title FROM article WHERE id = ?")
-                    .bind(id),            // 永远绑定参数，不要拼字符串
-            )
-            .await
-    }
-}
-```
-
-```rust
-// src/service/article_service.rs
 #[stemson::service]
-pub struct ArticleService {
-    article_repository: Arc<ArticleRepository>,
-}
+pub struct GreetingService {}
 
-impl ArticleService {
-    pub async fn title(&self, id: i64) -> ApiResult<Option<String>> {
-        Ok(self.article_repository.find(id).await?.map(|row| row.title))
+impl GreetingService {
+    pub fn greet(&self, name: &str) -> String {
+        format!("Hello, {name}!")
     }
 }
 ```
+
+**第二步：新增 `src/controller/greeting_controller.rs`。**
 
 ```rust
-// src/controller/article_controller.rs
+use std::sync::Arc;
+
+use crate::service::greeting_service::GreetingService;
+use stemson::{ApiResponse, ApiResult, RequestContext};
+
 #[derive(stemson::Autowired)]
-pub struct ArticleController {
-    article_service: Arc<ArticleService>,
+pub struct GreetingController {
+    greeting_service: Arc<GreetingService>,
 }
 
-#[stemson::controller("/v1/api/article")]
-impl ArticleController {
-    #[get("/{id}")]
-    async fn detail(&self, ctx: RequestContext) -> ApiResult<ApiResponse> {
-        let id: i64 = ctx
-            .path_param("id")
-            .and_then(|value| value.parse().ok())
-            .ok_or_else(|| ApiError::invalid_parameter("id must be a number"))?;
-        let title = self.article_service.title(id).await?;
-        Ok(ApiResponse::success(serde_json::json!({ "title": title })))
+#[stemson::controller("/hello")]
+impl GreetingController {
+    #[get("/{name}")]
+    async fn hello(&self, ctx: RequestContext) -> ApiResult<ApiResponse> {
+        let name = ctx.path_param("name").unwrap_or("world");
+        let message = self.greeting_service.greet(name);
+        Ok(ApiResponse::success(serde_json::json!({ "greeting": message })))
     }
 }
 ```
 
-记得在 `src/controller/mod.rs`、`src/service/mod.rs`、`src/repository/mod.rs` 里加一行 `pub mod ...;`
-（Rust 需要显式声明模块；注册与注入本身是自动的）。
+**第三步：在各自的 `mod.rs` 中声明模块。**
+
+```rust
+// src/service/mod.rs 增加
+pub mod greeting_service;
+
+// src/controller/mod.rs 增加
+pub mod greeting_controller;
+```
+
+重启服务后验证：
+
+```bash
+curl http://127.0.0.1:8080/hello/Ada
+# {"message":"success","data":{"greeting":"Hello, Ada!"},"code":"0000"}
+```
+
+`pub mod` 让代码参与编译，宏负责注册和注入，无需维护中心组件列表。新增路由的 OpenAPI 描述还需要在 `src/openapi.rs` 中维护；控制器宏不会自动生成接口文档。
+
+接入数据库时，再增加 Repository，并让 Service 注入它。SQL 放在 Repository 中，使用 `?` 占位和 `.bind(...)` 绑定输入；完整分层和宏规则见[架构文档](docs/ARCHITECTURE.md)。
+
+## 配置怎么选
+
+`STEMSON_CONFIG` 指定的是一份完整配置文件，开发配置不会自动叠加到默认配置上。
+
+| 启动方式 | 配置文件 | 端口 |
+|----------|----------|------|
+| `./scripts/dev.sh` | `config/config.dev.yaml` | 8080 |
+| `cargo run` | `config/config.yaml` | 80 |
+| `docker compose up --build` | `config/config.docker.yaml` | 8080 |
+
+```bash
+STEMSON_CONFIG=config/config.dev.yaml cargo run
+```
+
+- JWT 密钥支持 `STEMSON_JWT_SECRET` 环境变量覆盖。
+- 认证模式：`password` 只允许密码登录，`both` 支持两条登录路径，`opaque` 关闭密码登录端点。
+- OPAQUE 首次初始化会生成 `config/opaque_server_setup.bin`。这份长期密钥需要持久保存和备份；丢失后，原注册记录无法继续使用。当前 Compose 未为它配置持久卷。
+- Redis 在默认单实例配置下可选；OPAQUE 多副本防重放需要共享 Redis，并设置 `server.auth.opaque.nonce_store: redis`。
+- 热重载只影响后续读取配置的逻辑。端口、连接池、JWT 和认证模式等已初始化的对象需要重启，详见[配置生效范围](docs/ARCHITECTURE.md#7-配置什么时候生效)。
+
+## 代码在哪里
+
+```text
+src/
+  main.rs / app.rs        启动、路由装配和全局中间件
+  core/                   组件容器、依赖注入和路由推导
+  controller/             HTTP 接口
+  service/                业务逻辑
+  repository/             SQL 与数据映射
+  datasource/             MySQL / Redis
+  request/                请求解析与参数读取
+  auth.rs / auth/         JWT / OPAQUE
+  model/ / exception.rs   响应、业务码、身份模型和错误
+  config.rs / openapi.rs  配置与接口文档
+  utils/                  日志、密码哈希和雪花 ID
+stemson-macros/            过程宏
+config/                   默认、开发和 Docker 配置
+mysql/                    建库脚本
+scripts/ / examples/      开发、端到端测试和压测工具
+tests/                    集成测试
+docs/                     使用与设计文档
+```
 
 ## 常用命令
 
 ```bash
-cargo fmt --all                       # 格式化
+cargo fmt --all
 cargo clippy --all-targets -- -D warnings
-cargo test                            # 75 个单元/集成测试，无需数据库
-STEMSON_URL=http://127.0.0.1:8080 ./scripts/e2e-test.sh   # 真实 MySQL 端到端
-cargo run --example hash_password -- <password>             # 生成 Argon2 哈希
-scripts/benchmark.sh http://127.0.0.1:8080                   # 内置压测客户端
+cargo test
+
+# 需要服务已启动，且 MySQL 已初始化
+STEMSON_URL=http://127.0.0.1:8080 ./scripts/e2e-test.sh
+
+# 生成 Argon2id 密码哈希
+cargo run --example hash_password -- 'your-password'
+
+# 对运行中的服务压测
+scripts/benchmark.sh http://127.0.0.1:8080
 ```
 
-## 与原 Python 版的差异
+## 按任务查文档
 
-所有有意为之的行为变化都记录在 [docs/MIGRATION.md](docs/MIGRATION.md)，重点：
-
-| 主题 | 变化 |
-|------|------|
-| 路由 | 保持一致：`POST /user/user_controller/add_user` 等；另支持显式子路径 `#[get("/me")]` |
-| 响应码 | `code` 统一为 4 位业务码；HTTP 状态码改为语义正确（400/401/403/404/409/500） |
-| SQL | 删除关键词黑名单，全部改为参数化查询 |
-| 密码 | 由 `MD5+硬编码盐` 改为 **Argon2id**，数据库需要重建/重置密码 |
-| 认证 | 自行实现 JWT（不再依赖 sanic-jwt），claim 统一为 `user_id`；新增 OPAQUE 登录（`server.auth.mode`） |
-| 配置扫描 | 移除 `server.component.*`（Rust 编译期注册，无需运行时扫包） |
-
-## 文档
-
-- [架构设计](docs/ARCHITECTURE.md)：分层、DI、路由推导、请求生命周期
-- [API 文档](docs/API.md)：接口、业务码、curl 示例
-- [迁移说明](docs/MIGRATION.md)：逐项差异、需要人工处理的步骤
-- [性能对比](docs/BENCHMARK.md)：与 Python 原版的实测吞吐/延迟
-- [重构方案](docs/REFACTOR_PLAN.md)：功能清单与设计取舍
+| 你想做什么 | 阅读 |
+|------------|------|
+| 理解启动、注入、路由和请求处理 | [架构设计](docs/ARCHITECTURE.md) |
+| 调用认证与用户接口、排查业务码 | [API 文档](docs/API.md) |
+| 迁移 Python 数据、客户端和配置 | [迁移说明](docs/MIGRATION.md) |
+| 查看性能数据、测量口径和复现方法 | [性能对比](docs/BENCHMARK.md) |
+| 了解重构保留了什么、为什么这样取舍 | [重构决策](docs/REFACTOR_PLAN.md) |
 
 ## License
 
-MIT，与原项目一致。
+MIT

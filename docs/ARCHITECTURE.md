@@ -1,210 +1,219 @@
 # 架构设计
 
-本文说明 Rust/Axum 版如何对应 Python 原实现，以及请求在框架中的完整生命周期。
+Stemson 把接口处理拆成 Controller、Service、Repository、Datasource 四层。理解它只需区分两件事：**启动时构造组件，请求时调用组件**。
 
-## 1. 分层
+首次运行和新增接口示例见 [README](../README.md)；本文解释这些行为的实现和边界。
 
-```
-HTTP 请求
-   │
-   ▼
-Axum Router ──(CORS / Trace / Timeout / CatchPanic)──┐
-   │                                                  │
-   ▼                                                  │
-生成的 handler（每个 #[get]/#[post] 一个）             │
-   │  1. 解析 RequestContext（json/form/args/path/files + JWT）│
-   │  2. #[protected] / #[authority] 鉴权              │
-   │  3. #[validate] 参数校验                          │
-   ▼                                                  │
-Controller（从容器取出，字段已注入）                    │
-   ▼                                                  │
-Service                                               │
-   ▼                                                  │
-Repository（声明 SQL + 绑定参数）                       │
-   ▼                                                  │
-Datasource（MySQL 连接池 / Redis）                     │
-```
+## 1. 四层各自负责什么
 
-四层组件的注册顺序与 Python 的注入链一致：
-**datasource → repository → service → controller**。
+| 层 | 责任 | 当前示例 |
+|----|------|----------|
+| Controller | 接收 HTTP 参数、检查访问权限、组织响应 | `src/controller/user/user_controller.rs` |
+| Service | 执行业务规则、组织数据访问 | `src/service/user_service.rs` |
+| Repository | 声明 SQL、绑定参数、把结果映射为记录 | `src/repository/user_repository.rs` |
+| Datasource | 管理连接池、执行查询和事务 | `src/datasource/mysql.rs`、`redis.rs` |
 
-## 2. 组件注册与依赖注入
+一次用户查询沿以下方向调用：
 
-### 2.1 注册表
-
-`src/core/registry.rs` 定义 `ComponentRegistration`，宏为每个组件生成一条：
-
-```rust
-inventory::submit! {
-    ComponentRegistration {
-        name: "user_service",
-        kind: ComponentKind::Service,
-        type_name: "UserService",
-        build: __stemson_build_user_service,
-        as_controller: None,
-    }
-}
+```mermaid
+flowchart LR
+    H[HTTP 请求] --> C[Controller]
+    C --> S[Service]
+    S --> R[Repository]
+    R --> D[Datasource]
+    D --> DB[(MySQL)]
 ```
 
-`inventory` 在**链接期**收集所有条目，因此：
+不访问数据库的接口可以只使用 Controller 和 Service，无需为了满足层级而添加 Repository。
 
-- 新增组件只需写宏，不用改任何中心注册代码（对应 Python 的自动扫包注册）；
-- 无需运行时反射或包扫描（Rust 没有等价能力，见 `MIGRATION.md`）。
+## 2. 启动时：先构造依赖，再装配路由
 
-启动时 `AppContext::build_components()` 按层构建，同层按名字排序，保证启动确定性；
-重名（同层）或同类型重复注册会直接报错。
+入口 `main.rs` 调用 `stemson::run()`，实际启动逻辑在 `src/app.rs`：
 
-### 2.2 字段注入
+1. 加载 `STEMSON_CONFIG` 指定的 YAML；未指定时读取 `config/config.yaml`。
+2. 初始化日志和雪花 ID 生成器。
+3. 创建 `AppContext`，初始化 JWT、认证模式和可选的 OPAQUE 服务。
+4. 按配置开启文件监听，构造组件容器。
+5. 汇总控制器路由，加入 `/health`、Swagger、OpenAPI 和全局中间件。
+6. 绑定地址，开始接收请求；退出时处理 Ctrl-C / SIGTERM。
 
-`#[derive(Autowired)]` / `#[service]` / `#[repository]` / `#[datasource]` /
-`#[controller]` 都会解析结构体字段并生成 `Autowire::autowire(ctx)`：
+`AppContext` 保存配置、组件、认证服务和路由表。`AppState` 把这个上下文交给 Axum handler；`RequestContext` 则保存某一次请求的数据。
 
-| 字段写法 | 注入内容 |
-|----------|----------|
-| `foo: Arc<SomeComponent>` | 从容器按类型取 `SomeComponent` |
-| `config: Arc<Config>` | 应用配置（`ctx.config().clone()`） |
-| `#[value("datasource.mysql.port")] port: u16` | 配置项反序列化为 `u16`，缺失即启动失败 |
-| `#[skip] cache: OnceLock<T>` | `Default::default()`，用于运行期状态 |
+### 2.1 “自动注册”发生在哪个阶段
 
-对应关系：
+| 阶段 | 发生的事 |
+|------|----------|
+| 编译 | 过程宏生成构造函数、注册条目和 handler |
+| 链接 | `inventory` 收集参与编译的组件条目 |
+| 启动 | `AppContext::build_components()` 调用构造函数，建立实例 |
+| 请求 | handler 从容器取出已有控制器，调用方法 |
 
-```python
-@Service
-class UserService(ServiceBase):
-    @Autowired
-    def user_repository(self):
-        pass
-```
+因此新增文件仍需在 `mod.rs` 中声明。未参与编译的模块不会被发现；这里没有运行时目录扫描。
 
-```rust
-#[service]
-pub struct UserService {
-    user_repository: Arc<UserRepository>,
-}
-```
+### 2.2 构造顺序与依赖约束
 
-Python 里「被注入的方法不能带 `self`」的限制自然消失了。
-
-### 2.3 按名字解析
-
-容器同时保留 Python 的「小写下划线名字」索引（`user_service`、`mysql`），
-`AppContext::resolve_by_name("mysql")` 可取到任意组件，便于调试与兼容脚本。
-名字只在同一层内唯一（与 Python 的四张独立字典一致）。
-
-## 3. 自动路由
-
-### 3.1 推导规则
-
-与 `backend/core/component/controller.py` 完全一致：
+调用方向是 Controller → Service → Repository → Datasource；**构造顺序反过来**：
 
 ```text
-路径 = "/" + snake(模块路径去掉 <crate>::controller 前缀) + "/" + snake(结构体名)
+Datasource → Repository → Service → Controller
 ```
 
-| 控制器（文件 `src/controller/user/user_controller.rs`） | 路由 |
-|----------------------------------------------------------|------|
-| `ValidatePassword` | `POST /user/user_controller/validate_password` |
-| `AddUser` | `POST /user/user_controller/add_user` |
-| `GetUserInfo` | `POST /user/user_controller/get_user_info` |
-| `DeleteUser` | `POST /user/user_controller/delete_user` |
-| `ModifyUser` | `POST /user/user_controller/modify_user` |
-| `GetAllInfo`（`#[controller("/getall")]`） | `POST /getall` |
+同层组件按注册名排序。构造一个组件时，它的依赖必须已经存在；容器不会进行依赖图排序，也不会自动解决循环依赖。设计依赖时应指向更早构造的层，避免依赖同层名称排序。
 
-显式路径会覆盖推导结果；`#[get("/me")]` 这类子路径会与基础路径拼接：
+同一层的注册名不能重复，同一个 Rust 类型也不能重复注册，冲突会导致启动失败。
+
+### 2.3 宏与字段注入
 
 ```rust
-#[controller("/v1/api/auth")]      // GET /v1/api/auth/me
-impl AuthController {
-    #[get("/me")]
-    async fn me(&self, ctx: RequestContext) -> ApiResult<ApiResponse> { ... }
+#[stemson::service]
+pub struct UserService {
+    user_repository: std::sync::Arc<UserRepository>,
 }
 ```
 
-HTTP 方法由 `#[get]` `#[post]` `#[put]` `#[delete]` `#[patch]` `#[head]` `#[options]` 声明，
-取代了 `HTTPMethodView` 的 `post`/`get` 方法名。
+这里 `#[service]` 同时生成构造逻辑并注册组件。Controller 的惯用写法分为两步：在结构体上 `#[derive(Autowired)]` 生成构造逻辑，在 `impl` 上 `#[controller]` 注册组件和路由。
 
-### 3.2 路由表
+| 字段或宏 | 含义 |
+|----------|------|
+| `dependency: Arc<T>` | 按 Rust 类型解析已有组件 `T` |
+| `config: Arc<Config>` | 注入当前应用配置对象 |
+| `#[value("server.name")] name: String` | 构造时读取并反序列化配置；缺失或类型错误会使启动失败 |
+| `#[skip] cache: OnceLock<T>` | 用 `Default::default()` 初始化，供运行期使用 |
+| `#[derive(Autowired)]` | 只生成构造逻辑，本身不注册组件 |
+| `#[service]` / `#[repository]` / `#[datasource("name")]` | 生成构造逻辑、层标记 trait 和注册条目 |
+| `#[controller(...)]` | 为 `impl` 生成路由、handler 和组件注册；结构体需实现 `Autowire` |
 
-每个控制器同时生成 `route_entries()`，装配路由时汇总到 `AppContext`，
-用于：
+普通组件默认名为类型名的 snake_case，例如 `UserService` → `user_service`；数据源可显式命名为 `mysql`。字段注入按类型进行，不要求字段名与注册名相同。
 
-- 启动日志/自检；
-- OpenAPI 一致性测试（`tests/router.rs` 断言文档里的每个路径都真实存在）。
+`resolve_by_name("mysql")` 用于按名字查找。同名跨层时按 Datasource、Repository、Service、Controller 的顺序返回第一个结果；业务代码优先使用按类型注入。
 
-## 4. 请求生命周期
+## 3. 路由：基础路径 + 方法子路径
 
-以 `AddUser` 为例，宏生成的 handler 等价于：
+### 3.1 显式路径
 
 ```rust
-async fn __stemson_route_add_user_0(
-    State(state): State<AppState>,
-    request: Request,
-) -> Response {
-    let result: ApiResult<ApiResponse> = async move {
-        let ctx = RequestContext::from_request(&state, request).await?;
-        ctx.require_auth()?;                          // #[protected]
-        // ctx.require_identity(&[...])?;             // #[authority([...])]
-        {
-            let mut v = ctx.validator(ParamScope::Json);   // #[validate(...)]
-            v.not_empty(&["username", "password"]);
-            v.check()?;
-        }
-        let controller = state.ctx().resolve::<AddUser>()?;
-        AddUser::post(&*controller, ctx).await
-    }.await;
-    match result {
-        Ok(value) => value.into_response(),
-        Err(error) => error.into_response(),
+#[stemson::controller("/v1/api/auth")]
+impl AuthController {
+    #[get("/me")]
+    async fn me(&self, ctx: RequestContext) -> ApiResult<ApiResponse> {
+        // 业务处理
+        todo!()
     }
 }
 ```
 
-要点：
+基础路径 `/v1/api/auth` 与子路径 `/me` 拼接，得到 `GET /v1/api/auth/me`。
+`#[post]` 没有子路径时直接使用基础路径，**不会把方法名追加到 URL**。
 
-1. **请求体只读一次**：`RequestContext` 在构造时把 body 读入内存并按 `Content-Type`
-   解析为 `json` / `form` / 文件；字段访问统一走 `ctx.text()`、`ctx.json_as::<T>()`、
-   `ctx.param(key, scope)`。
-2. **鉴权先于校验**，与 Python 装饰器栈 `@protected` 在 `@NotEmpty` 外侧的顺序一致。
-3. 控制器实例由容器提供，字段注入发生在启动阶段，请求期只做一次哈希表查找。
-4. 所有错误都转成 `ApiError`，最终渲染为统一响应体。
+支持 `get`、`post`、`put`、`delete`、`patch`、`head`、`options`。路径参数使用 `/{id}`，由 `ctx.path_param("id")` 读取。
 
-## 5. 参数校验
+### 3.2 省略基础路径时自动推导
 
-| Python 装饰器 | Rust 写法（`#[validate(...)]`） |
-|---------------|----------------------------------|
-| `@NotEmpty(required=[...], parameter_type=...)` | `not_empty(["..."])` |
-| `@Length(key, min, max, message)` | `length("key", min, max, "message")` |
-| `@Range(key, min, max, message)` | `range("key", min, max, "message")` |
-| `@Pattern(key, pattern, pattern_mode, message)` | `pattern("key", r"...", match, "message")` |
-| `@EnumString(key, value=[...], message)` | `enum_string("key", ["a", "b"], "message")` |
-| `@Assert(key, condition, message)` | `assert("key", fn_name, "message")` |
-| 文件断言（鸭子类型） | `assert_file("key", fn_name, "message")` |
+对于位于 `src/controller/` 下的控制器：
 
-- 作用域：`json` / `form` / `args` / `path` / `files` / `all`（默认 `all`，
-  合并优先级 path → form → args → files → json）。
-- 语义逐条对齐原实现：缺少参数 → `MISS_PARAMETERS(0010)`，值非法 → `INVALID_PARAMETER(0015)`；
-  第一个失败即返回（与装饰器链一致）。
-- `pattern` 的 `match` 等价 Python `re.match`（从行首锚定），`search` 等价 `re.search`。
+```text
+模块路径 stemson::controller::user::user_controller
+去掉前缀 stemson::controller
+剩余模块段转 snake_case，并追加结构体名的 snake_case
 
-## 6. 认证与鉴权
+AddUser → /user/user_controller/add_user
+```
 
-- `Claims`：`user_id`、`username`、`role`、`identity`、`scopes`、`iat`、`nbf`、`exp`。
-  原实现把 JWT 的 `user_id` 配置成 `username`，却按 `user_id` 读取，导致 `/me`
-  与 `@protected` 取不到用户；这里统一为 `user_id`（见 `MIGRATION.md`）。
-- 每次请求都会尝试解析 `Authorization: Bearer <token>`：
-  - 合法 → `ctx.auth = Some(AuthUser)`；
-  - 非法 → 记录原因，`require_auth()` 返回具体错误（`0004` 或 `0007`）；
-  - 缺失 → `0014`。
-- `#[protected]`：要求已认证；`#[code]` 处理器内部可 `ctx.require_user()?` 取 Claims。
-- `#[authority([UserIdentity::Admin])]`：按身份做「≥」比较（超管满足管理员，管理员满足普通用户）。
-- 业务层还保留原实现的 `role` 判断：`ctx.require_admin("add user information")`。
+| 声明 | 路由 |
+|------|------|
+| `AddUser` + `#[controller]` + `#[post]` | `POST /user/user_controller/add_user` |
+| `GetAllInfo` + `#[controller("/getall")]` + `#[post]` | `POST /getall` |
+| `AuthController` + `#[controller("/v1/api/auth")]` + `#[get("/me")]` | `GET /v1/api/auth/me` |
 
-## 7. 数据源
+这些规则保留 Python 版的实际用户接口路径。若希望文件重命名不改变外部 URL，应声明显式路径。
 
-### MySQL
+### 3.3 路由表与 OpenAPI
 
-- `sqlx::MySqlPool`，**懒连接**：服务可以在 MySQL 暂时不可用时启动（与原 `aiomysql` 一致）。
-- Repository 声明 SQL，数据源负责执行与映射：
+控制器宏同时生成 `routes()` 和 `route_entries()`。装配时将后者存入 `AppContext`，供自检和测试使用。
+
+OpenAPI 描述在 `src/openapi.rs` 中独立维护，控制器宏不会自动把新接口加入 OpenAPI。`tests/router.rs` 检查文档中的路径是否存在于路由表；新增接口时仍需同步维护文档。
+
+## 4. 请求时：解析、鉴权、校验、调用
+
+```mermaid
+flowchart TD
+    A[匹配到控制器路由] --> B[构造 RequestContext：读取 body、解析参数和 JWT]
+    B --> C[执行 protected / authority 检查]
+    C --> D[按声明顺序执行 validate]
+    D --> E[从容器取出 Controller 并调用方法]
+    E --> F[Service / Repository / Datasource]
+    F --> G[ApiResponse 或 ApiError 转为 HTTP 响应]
+```
+
+1. **先解析请求。** body 读入内存一次，再按 Content-Type 解析 JSON、form 或 multipart。错误的 JSON 或过大的 body 可在鉴权之前返回错误。
+2. **再执行宏声明的鉴权。** `#[protected]` 要求有效 JWT；`#[authority]` 检查 JWT 中的身份。
+3. **再执行声明式校验。** 第一条失败的规则立即返回。
+4. **最后调用控制器方法。** 方法内部仍可执行 `require_admin()` 等业务权限检查，这些检查发生在宏校验之后。
+
+有效 JWT 只解析为 Claims，不会使每个受保护接口都查询数据库。组件在请求之间共享，字段注入不会按请求重复执行。
+
+全局中间件提供 CORS、请求追踪、panic 兜底和可选超时。404、405、超时、业务错误统一转为业务响应体；Swagger 页面和 OpenAPI JSON 使用各自格式。
+
+### 参数从哪里读取
+
+| API / 作用域 | 来源 |
+|--------------|------|
+| `ctx.json_as::<T>()` / `json` | JSON 对象请求体 |
+| `form` | URL 编码表单或 multipart 普通字段 |
+| `args` | URL query |
+| `ctx.path_param("id")` / `path` | 路由路径参数 |
+| `ctx.file("file")` / `files` | multipart 文件及其元数据 |
+| `ctx.text("key")` / `all` | 合并后的参数视图 |
+
+`all` 中同名参数的覆盖优先级由高到低为：**json > files > args > form > path**。需要确定来源时使用显式作用域，避免 body 覆盖同名路径参数。
+
+multipart 文件也会整体读入内存。请求体大小由 `server.http.request_max_size` 控制。
+
+## 5. 校验与权限分别检查什么
+
+### 5.1 参数校验
+
+```rust
+#[validate(
+    json,
+    not_empty(["username", "password"]),
+    length("password", 5, 20, "Length of password must be 5 to 20"),
+)]
+```
+
+| 规则 | 用途 |
+|------|------|
+| `not_empty(["key"])` | 要求字段存在且不是 `null`（空字符串仍可通过） |
+| `length("key", min, max, "message")` | 长度范围 |
+| `range("key", min, max, "message")` | 数值范围 |
+| `pattern("key", r"...", match, "message")` | 正则匹配；`match` 从开头匹配，`search` 任意位置搜索 |
+| `enum_string("key", ["a", "b"], "message")` | 字符串枚举 |
+| `assert("key", fn_name, "message")` | 自定义值断言 |
+| `assert_file("key", fn_name, "message")` | 自定义文件断言 |
+
+默认作用域为 `all`，也可显式指定 `json/form/args/path/files`。`not_empty` 对缺失 / `null` 返回 `0010`，其他规则的非法值通常返回 `0015`；非空字符串等业务要求需另加长度或自定义检查。
+
+### 5.2 认证与授权
+
+认证回答“是谁”，授权回答“能做什么”：
+
+| 检查 | 判断依据 |
+|------|----------|
+| `#[protected]` / `ctx.require_user()` | JWT 签名、有效期等是否有效 |
+| `ctx.require_admin(...)` | Claims 的 `role != 0` |
+| `#[authority([UserIdentity::Admin])]` | Claims 的 `identity` 是否满足管理员身份 |
+
+`role` 为 0（普通用户）或 1（管理员）。`identity` 为 1（超管）、2（管理员）、3（普通用户），**数字越小权限越高**；超管可以访问要求管理员身份的接口。
+
+两者是独立字段。当前大部分用户管理接口检查 `role`，`/getall` 检查 `identity`，不能把两套规则当作同一检查。
+
+密码登录和 OPAQUE 登录成功后都签发 JWT。两种登录和邀请注册的协议细节见 [API 文档](API.md#3-认证先选登录方式再获取-jwt)。
+
+## 6. 数据访问与事务
+
+MySQL 连接池和 Redis 连接管理器都在首次使用时初始化。因此启动成功或 `/health` 返回 200，并不表示数据库可用。
+
+Repository 声明 SQL，Datasource 执行并转换错误。例如按用户 ID 查询时使用占位符与参数绑定：
 
 ```rust
 let sql = format!("{SELECT_USER} WHERE u1.uid = ?");
@@ -213,39 +222,54 @@ self.mysql
     .await
 ```
 
-- `execute_many`：同一语句批量执行（对应 `cursor.executemany`），内部包事务。
-- `begin()`：拿到 `sqlx::Transaction`，用于「插入用户 + 复制用户组」这类原子操作。
-- 无符号列（`BIGINT UNSIGNED` / `TINYINT UNSIGNED`）在 SELECT 中 `CAST(... AS SIGNED)`，
-  Rust 侧保持 `i64`/`i32`，与 JWT、API 一致。
+这里 `SELECT_USER` 是代码中的固定 SQL 片段；用户输入 `uid` 通过 `.bind(uid)` 传入。
 
-### Redis
+- `fetch_all` / `fetch_optional` / `fetch_one`：查询并映射为 Rust 记录。
+- `execute`：执行写操作。
+- `execute_many`：同一语句多组参数，在内部事务中批量执行。
+- `begin`：显式创建事务，由调用方组织多条语句并提交。例如创建用户和复制用户组需在同一事务中完成。
 
-`RedisDataSource` 持有 `ConnectionManager`（懒连接），提供 `get/set/set_ex/del/get_json/ping`。
+Redis 提供 `get/set/set_ex/del/get_json/ping` 和 `set_if_absent_ex`。后者执行原子 `SET NX EX`，用于 OPAQUE 多副本防重放。
 
-## 8. 配置
+## 7. 配置什么时候生效
 
-- `Config::get("a.b.c")` 逐段下钻；命中标量则返回标量（与 Python 语义一致）。
-- 类型化读取：`string/i64/u16/bool/get_as/require`。
-- 注入：`#[value("...")]` 在启动期读取，缺失直接失败（相当于 Python 抛 `ValueError`）。
-- 热重载：`notify` 监听配置文件，`arc-swap` 原子替换，读路径无锁；
-  200 ms 去抖以合并编辑器连续写入。
-  **只有「每次读取时取值」的配置会生效**（例如 `/health` 里的 name、校验开关）；
-  数据库连接、监听端口等基础设施配置需要重启。
+`Config::get("a.b.c")` 按点号逐层取值；`string/i64/u16/bool/get_as/require` 提供类型化读取。配置是完整文件加载，不是默认配置与开发配置合并。
 
-## 9. 日志
+开启 `server.config_watch` 后，`notify` 监听文件变更，200 ms 去抖，再用 `arc-swap` 原子替换配置快照。**快照更新不等于已构造的对象被重建。**
 
-- `tracing` + 自定义 `FormatEvent`，解析原配置里的 Python 风格模板：
-  `%(asctime)s %(levelname)s %(filename)s %(lineno)d %(module)s %(funcName)s %(message)s`。
-- 控制台带颜色；文件按**天**轮转，`backupCount` 控制保留个数。
-- `%(funcName)s` 无法精确对应：`tracing` 元数据里没有函数名，事件名形如
-  `event <file>:<line>`，这里只保留 `event`。
+| 配置用途 | 生效时机 |
+|----------|----------|
+| `/health` 中的 `server.name`、请求体大小上限 | 后续请求重新读取时生效 |
+| `#[value("...")]` 注入到普通字段的值 | 组件构造时固定，需重启 |
+| 端口、CORS、请求超时、日志、JWT、认证模式、OPAQUE 参数 | 启动或路由装配时读取，需重启 |
+| MySQL / Redis 连接参数 | 首次初始化后保留，修改后应重启 |
 
-## 10. 扩展点
+JWT 密钥由 `JwtService` 在初始化时读取，支持 `STEMSON_JWT_SECRET` 覆盖。
 
-| 想做的事 | 做法 |
-|----------|------|
-| 新增数据源 | 实现 `#[datasource("name")]` 结构体 + `DatasourceBase`，Repository 注入它 |
-| 新增校验规则 | 在 `Validator` 加方法，在宏的 `validate.rs` 加一个 rule 分支 |
-| 新增中间件 | 在 `app.rs::build_router` 的层叠处添加 `tower` 层 |
-| 自定义 404/500 | 改 `app.rs` 的 `not_found` / `CatchPanicLayer` |
-| 关闭请求超时 | `server.http.request_timeout: 0` |
+## 8. OPAQUE 状态与部署边界
+
+OPAQUE 把密码验证拆成客户端与服务端的两轮交换。这里有三类不同的数据：
+
+| 数据 | 保存位置 | 用途 |
+|------|----------|------|
+| 用户注册记录 | MySQL `user.opaque_registration` | 后续密码证明 |
+| 长期服务端密钥 | `server.auth.opaque.setup_file` | 协议计算与登录状态加密；必须持久保存、备份 |
+| 已提交登录 session 的标记 | 进程内存或共享 Redis | 防止相同 session 重复提交 |
+
+`login/start` 把中间状态加密成 `session` 交给客户端；`login/finish` 解密并验证。持有相同 setup 的实例都能处理第二轮，无需粘性会话。
+
+不过，**一次性检查需要保存已用标记**：默认 `single_use: true`，单实例用 `nonce_store: memory`；多实例使用同一 setup、数据库和共享 Redis，并设置 `nonce_store: redis`。内存标记随进程重启丢失，不具备跨重启防重放能力。
+
+第二轮在验证前占用标记，错误提交也会消耗 session。客户端失败重试时应重新发起第一轮。
+
+## 9. 修改框架时从哪里入手
+
+| 目标 | 位置与操作 |
+|------|------------|
+| 新增数据源 | `#[datasource("name")]` 结构体；宏生成层标记，Repository 按类型注入 |
+| 新增校验规则 | `src/core/decorator/validate.rs` + `stemson-macros/src/validate.rs` |
+| 新增中间件、修改 404/405/panic 行为 | `src/app.rs::build_router` 及对应 handler |
+| 调整错误体或业务码 | `src/exception.rs`、`src/model/response.rs`、`src/model/status_code.rs` |
+| 增补接口文档 | `src/openapi.rs` + `docs/API.md` |
+
+日志由 `tracing` 输出到控制台和按天轮转的文件，`backupCount` 控制保留数量。兼容的 Python 风格模板中，`%(funcName)s` 只能输出 `event`；`maxBytes` 保留为兼容配置项，不控制轮转。

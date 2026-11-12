@@ -1,11 +1,23 @@
 # API 文档
 
-服务地址示例：`http://127.0.0.1:8080`。交互式文档：`/swagger`；机器可读：
-`/openapi.json`。
+本文描述当前 Rust 服务的实际接口。示例使用开发地址 `http://127.0.0.1:8080`；启动步骤见 [README](../README.md)。用户和登录接口需要已初始化的 MySQL。
+
+建议先用密码登录获取 JWT，再调用受保护接口；需要 OPAQUE 时，按“管理员发邀请 → 客户端注册 → 客户端登录”的顺序接入。
+
+| 用途 | 方法与路径 | 条件 |
+|------|------------|------|
+| 密码登录 | `POST /v1/api/auth` | `password` 或 `both` 模式 |
+| OPAQUE 注册 | `POST /v1/api/auth/register/start`、`/register/finish` | OPAQUE 已启用；完成注册需要邀请 |
+| OPAQUE 登录 | `POST /v1/api/auth/login/start`、`/login/finish` | OPAQUE 已启用，账号已注册 |
+| 当前用户 / token 校验 | `GET /v1/api/auth/me`、`/verify` | 有效 JWT |
+| 续签 token | `POST /v1/api/auth/refresh` | 尚未过期的 JWT |
+| 用户管理 | `POST /user/user_controller/...`、`POST /getall` | JWT + 对应权限，见第 4 节 |
+| 存活检查 | `GET /health` | 无需数据库和 JWT |
+| 交互文档 / 接口定义 | `GET /swagger`、`GET /openapi.json` | 无需 JWT |
 
 ## 1. 统一响应体
 
-所有接口（含错误）都返回同一结构，字段顺序固定：
+业务接口、健康检查及框架错误响应使用以下结构，字段顺序固定。Swagger 页面和 OpenAPI JSON 使用各自格式：
 
 ```json
 {
@@ -23,8 +35,8 @@
 
 请求要求：
 
-- 除文件上传外，请求体使用 `application/json`（缺失时返回 `0010` 并提示设置 Content-Type）。
-- 请求体上限由 `server.http.request_max_size` 控制，默认 10 MiB，超出返回 413。
+- 需要 JSON 参数的业务接口必须使用 `Content-Type: application/json`，请求体必须为对象；空 body 或未按 JSON 解析时，字段校验 / `json_as()` 返回 `0010`。无请求体的 `/verify`、`/getall` 等接口不要求此头。
+- 请求体上限由 `server.http.request_max_size` 控制，默认 10 MiB，超出返回 HTTP 413 / `0015`。
 - 默认请求超时 30 秒（`server.http.request_timeout`，`0` 关闭），超时返回 `0001` / 408。
 
 ## 2. 业务码
@@ -48,11 +60,23 @@
 | `0014` | UNAUTHORIZED | 401 | 未认证（缺少 Authorization） |
 | `0015` | INVALID_PARAMETER | 400 | 参数非法 |
 | `0016` | INTERNAL_SERVER_ERROR | 500 | 服务内部错误（详情只写日志） |
-| `0017` | USER_ALREADY_EXIST | 409 | 用户名已存在（原文档提到、原枚举缺失，本次补上） |
+| `0017` | USER_ALREADY_EXIST | 409 | 用户名已存在（Rust 版新增） |
 
-## 3. 认证
+## 3. 认证：先选登录方式，再获取 JWT
 
-### 3.1 登录
+### 3.1 选择登录方式
+
+| `server.auth.mode` | 密码登录端点 | OPAQUE 注册 / 登录 |
+|--------------------|--------------|--------------------|
+| `password` | 可用 | 不可用 |
+| `both`（仓库配置） | 可用 | 可用 |
+| `opaque` | 返回 `0015` | 可用 |
+
+两种登录最终都返回相同的 JWT。后续请求统一携带 `Authorization: Bearer <access_token>`。这里的 `opaque` 模式关闭的是签发 JWT 的密码登录端点；旧的 `validate_password` 校验接口仍存在，见 4.1。
+
+种子账号只有 Argon2id 密码哈希，不能直接使用 OPAQUE。先在 `both` 模式下用它创建邀请账号，完成注册并确认管理员可用后再切换模式。现有账号的邀请补发和 OPAQUE 密码重置没有独立接口。
+
+### 3.2 密码登录
 
 ```http
 POST /v1/api/auth
@@ -73,9 +97,9 @@ Content-Type: application/json
 }
 ```
 
-错误：`0010`（缺参数）、`0013`（用户不存在）、`0006`（密码错误）。
+密码为明文输入，部署时应通过 HTTPS 传输，服务端用 Argon2id 校验。长度要求 1–256；错误包括 `0010`（缺参数）、`0015`（长度非法或该登录路径关闭）、`0013`（用户不存在）、`0006`（密码错误或账号仅有 OPAQUE 记录）、`0008`（账号被禁用）。
 
-### 3.2 当前用户
+### 3.3 当前用户
 
 ```http
 GET /v1/api/auth/me
@@ -102,7 +126,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 3.3 校验 token
+### 3.4 校验 token
 
 ```http
 GET /v1/api/auth/verify
@@ -113,125 +137,119 @@ Authorization: Bearer <token>
 {"message":"success","data":{"valid":true,"user_id":1341983140255768576,"username":"admin","expires_at":1794294556},"code":"0000"}
 ```
 
-### 3.4 续签
+### 3.5 续签
 
 ```http
 POST /v1/api/auth/refresh
 Authorization: Bearer <token>
 ```
 
-返回与登录相同的 `TokenResponse`（`access_token` 为新的 token）。
+返回与登录相同的 `TokenResponse`（`access_token` 为新的 token）。这不是 refresh token 机制：原 token 必须尚未过期，过期后需要重新登录。
 
-### 3.6 OPAQUE 登录（推荐）
+### 3.6 OPAQUE：先邀请注册，再登录
 
-`server.auth.mode` 为 `opaque` 或 `both` 时可用。登录拆成两轮，密码永远不出现在
-服务端；服务端只存 OPAQUE 注册记录（`user.opaque_registration`），不存哈希。
+OPAQUE 是客户端与服务端共同执行的密码协议。密码在客户端用于生成协议消息，发送给服务端的是消息而非密码。注册完成后，账号保存 `opaque_registration`，`password` 置空；该账号不能通过密码登录端点登录。
 
-**第一轮**
-
-```bash
-curl -X POST http://127.0.0.1:8080/v1/api/auth/login/start \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","credential_request":"<base64url>"}'
+```mermaid
+sequenceDiagram
+    participant A as 管理员
+    participant C as 用户客户端
+    participant S as Stemson
+    A->>S: add_user（不传 password）
+    S-->>A: invite_token
+    A->>C: 交付邀请
+    C->>S: register/start（registration_request）
+    S-->>C: registration_response
+    C->>S: register/finish（invite_token + registration_upload）
+    S-->>C: 注册成功
+    C->>S: login/start（credential_request）
+    S-->>C: credential_response + session
+    C->>S: login/finish（session + credential_finalization）
+    S-->>C: JWT
 ```
 
-```json
-{
-  "message": "success",
-  "data": {
-    "credential_response": "<base64url>",
-    "session": "<base64url，服务端加密状态，客户端原样回传>"
-  },
-  "code": "0000"
-}
-```
-
-**第二轮**
+#### 管理员创建邀请
 
 ```bash
-curl -X POST http://127.0.0.1:8080/v1/api/auth/login/finish \
-  -H 'Content-Type: application/json' \
-  -d '{"session":"<上一轮返回>","credential_finalization":"<base64url>"}'
-```
-
-返回与 3.1 相同的 `access_token`。密码错误返回 `0006` / 401；`session` 过期（默认
-120 秒，`server.auth.opaque.session_ttl`）或**已被使用过**返回 `0014` / 401。
-
-严格一次性：`server.auth.opaque.single_use`（默认 `true`）开启后，第二轮会在校验
-`CredentialFinalization` 之前用 `SET NX EX` 原子占位，因此同一个 `session` 即使被
-并发提交也只能成功一次。单实例用 `nonce_store: memory` 即可；多副本部署必须用
-`nonce_store: redis`（共享 Redis，TTL 与 `session_ttl` 一致）。
-
-`session` 是**无状态**的：里面是加密后的 `ServerLogin` 状态和过期时间，任何持有同一
-份 `setup_file` 的实例都能完成第二轮，因此 OPAQUE 登录可以水平扩展，不需要 Redis
-或粘性会话。
-
-### 3.7 OPAQUE 注册（邀请制）
-
-管理员创建用户时不传密码，服务端返回一次性 `invite_token`（24 小时有效、
-只能使用一次）：
-
-```bash
-# 管理员登录后
 curl -X POST http://127.0.0.1:8080/user/user_controller/add_user \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"username":"alice","role":0,"email":"alice@example.com"}'
 ```
 
+成功响应的 `data` 包含新用户信息，以及：
+
 ```json
 {
-  "message": "Add user alice success",
-  "data": {
-    "user_id": 2120078728141873152,
-    "username": "alice",
-    "invite_token": "xRTDrB8-tLJQwoGsoEVAJFnwWyPE6XKZ3bVtXPNJR0k",
-    "registration_required": true
-  },
-  "code": "0000"
+  "invite_token": "<一次性邀请>",
+  "registration_required": true
 }
 ```
 
-用户拿到邀请后完成注册：
+邀请有效期为 24 小时，明文仅在创建时返回，服务端保存其哈希。有效邀请只能消费一次。`register/start` 生成协议响应；邀请在 `register/finish` 写入记录时验证并消费。
 
-```bash
-# 第一轮
-curl -X POST http://127.0.0.1:8080/v1/api/auth/register/start \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","registration_request":"<base64url>"}'
-
-# 第二轮
-curl -X POST http://127.0.0.1:8080/v1/api/auth/register/finish \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","invite_token":"<上面返回的>","registration_upload":"<base64url>"}'
-```
-
-注册成功后该账号的 `password` 置空，只能用 OPAQUE 登录。
-
-**客户端实现**：浏览器/Node 用
-[`@serenity-kit/opaque`](https://github.com/serenity-kit/opaque)（后端同一套
-`opaque-ke` 的 wasm 版）；Rust 客户端示例见 `examples/opaque_client.rs`：
+#### 用仓库客户端完成注册和登录
 
 ```bash
 cargo run --release --example opaque_client -- register \
-  --url http://127.0.0.1:8080 --username alice --password 's3cret' --invite TOKEN
+  --url http://127.0.0.1:8080 --username alice --password 's3cret' --invite '<invite_token>'
+
 cargo run --release --example opaque_client -- login \
   --url http://127.0.0.1:8080 --username alice --password 's3cret'
 ```
 
-服务端成本约 **0.23 ms/次登录**（Argon2id 校验约 14.8 ms），详见
-[docs/BENCHMARK.md](BENCHMARK.md)。
+注册命令执行两轮注册，登录命令执行两轮登录并输出 JWT。实现见 [`examples/opaque_client.rs`](../examples/opaque_client.rs)。
 
-### 3.8 鉴权规则
+#### 自行实现客户端时的消息格式
+
+下表中的端点均为 **POST**，使用 `application/json`，路径前缀为 `/v1/api/auth`。成功字段位于统一响应的 `data` 中。
+
+| 端点 | 请求字段 | 成功返回 |
+|------|----------|----------|
+| `/register/start` | `username`、`registration_request` | `registration_response` |
+| `/register/finish` | `username`、`invite_token`、`registration_upload` | `data: null` |
+| `/login/start` | `username`、`credential_request` | `credential_response`、`session` |
+| `/login/finish` | `session`、`credential_finalization` | `access_token`、`token_type`、`expires_in` |
+
+协议消息使用 **base64url，无 padding**。这些字段必须由 OPAQUE 客户端计算，不能把密码直接编码后填入。客户端应保留第一轮本地状态，用于处理服务端响应并生成第二轮消息；`session` 则原样回传。
+
+当前 Rust 客户端与服务端采用相同套件：Ristretto255、TripleDH / SHA-512、Argon2 KSF。接入浏览器或其他语言时，必须核对协议版本、套件、参数、标识和序列化格式，并与本服务联调；仅使用一个同名 OPAQUE 库不能保证互通。
+
+#### 失败与重试
+
+- 邀请非法、过期或已消费：`register/finish` 返回 `0015` / 400。
+- 未知用户名：`login/start` 仍生成协议响应，不用第一轮响应判断账号是否存在。
+- 密码错误：客户端通常在处理第一轮响应时失败；若无效证明提交到第二轮，服务端返回 `0006` / 401。
+- session 过期或已提交：`0014` / 401。默认有效期 120 秒，由 `server.auth.opaque.session_ttl` 设置，当前实现最低为 30 秒。
+- 默认 `single_use: true` 在验证证明前占用 session，失败提交也会消耗它。重试应重新开始 `login/start`，不要重复提交同一个 session。
+
+#### 部署时需要共享什么
+
+登录中间状态加密在 `session` 中，持有同一 `setup_file` 的实例都能完成第二轮，无需粘性会话；但防重放需要共享“已用 session”标记。
+
+| 部署 | 配置与要求 |
+|------|------------|
+| 单实例 | `nonce_store: memory`；重启后内存标记丢失 |
+| 多实例 | 同一数据库、同一 `setup_file`、共享 Redis，设置 `nonce_store: redis` |
+
+Redis 模式用原子 `SET NX EX` 占位；内存模式用进程内表。`setup_file` 首次初始化时生成，必须持久保存和备份；丢失会使既有 OPAQUE 注册记录失效。
+
+服务端计算与端到端耗时的区别见[性能对比](BENCHMARK.md#8-登录opaque-与-argon2id-的差距)。
+
+### 3.7 鉴权规则
 
 - 缺少 `Authorization` → `0014`；格式不是 `Bearer <token>` → `0014`；
 - token 伪造/损坏 → `0004`；过期 → `0007`；
-- 账户被禁用（`status=0`）→ `0008`。
+- 登录时检查账户是否禁用（`status=0`），禁用返回 `0008`。
+
+受保护接口默认校验 JWT，不会逐请求重新检查数据库中的 `status`、`role` 或 `identity`；已有 token 中的身份信息会持续到 token 过期。`/verify` 只证明 token 有效，不证明账号当前仍可登录。
+
+权限检查有两套字段：用户管理的大部分接口要求 JWT 的 `role != 0`；`/getall` 要求 `identity` 满足管理员。`identity` 数值越小权限越高：1 超管、2 管理员、3 普通用户。
 
 ## 4. 用户接口
 
 > 路由保持 Python 版的实际行为（由模块路径 + 类名推导），并非旧文档里的
-> `/v1/api/user/...`；详见 `MIGRATION.md`。
+> `/v1/api/user/...`；详见[迁移说明](MIGRATION.md)。
 
 ### 4.1 校验用户名密码
 
@@ -243,13 +261,15 @@ Content-Type: application/json
 ```
 
 - 密码长度 5–20（不满足 → `0015`，消息 `Length of password must be 5 to 20`）。
-- 正确 → `0000`，`data.valid = true`；错误 → `0006`。
+- 正确 → `0000`，`data.valid = true`；密码错误或仅有 OPAQUE 记录 → `0006`；用户不存在 → `0013`。
+- 该接口不签发 JWT，不受 `server.auth.mode` 的密码登录开关控制，也不检查账号禁用状态。
 
 ### 4.2 新增用户（管理员）
 
 ```http
 POST /user/user_controller/add_user
 Authorization: Bearer <admin token>
+Content-Type: application/json
 
 {"username": "test2", "password": "secret123", "role": 0,
  "phone": "18600000000", "email": "test2@example.com"}
@@ -258,7 +278,8 @@ Authorization: Bearer <admin token>
 - 需要 `role != 0`（管理员）；普通用户 → `0008`。
 - `role` 必须为 0/1，否则 `0009`。
 - 用户名重复 → `0017`。
-- 成功返回新用户（不含密码）。
+- 传入非空 `password` 时创建 Argon2id 密码账号；在 `both` / `opaque` 模式下省略密码，可创建邀请账号，见 3.6。`password` 模式下密码必填。
+- 成功返回新用户（不含密码）；邀请账号另外返回 `invite_token` 和 `registration_required`。
 
 新用户的 `identity`：`role=1` → 2（管理员）；`role=0` → 3（普通用户）。
 原实现依赖列默认值 1（超管），属于越权隐患，这里已修正。
@@ -268,6 +289,7 @@ Authorization: Bearer <admin token>
 ```http
 POST /user/user_controller/get_user_info
 Authorization: Bearer <admin token>
+Content-Type: application/json
 
 {"user_id": 1342014866998829056}
 ```
@@ -279,6 +301,7 @@ Authorization: Bearer <admin token>
 ```http
 POST /user/user_controller/modify_user
 Authorization: Bearer <admin token>
+Content-Type: application/json
 
 {
   "user_id": 1342014866998829056,
@@ -291,13 +314,15 @@ Authorization: Bearer <admin token>
 ```
 
 - 6 个字段必填（与 Python 版一致）；`email` 需通过格式校验（失败 → `0015`）。
-- `password` 传明文，服务端用 Argon2id 重新哈希。
+- `password` 传非空明文时，服务端用 Argon2id 重新哈希；这不是 OPAQUE 密码重置流程。
+- 此接口是完整字段提交；Service 内部命令虽支持可选更新，HTTP 接口仍要求上述 6 个字段。
 
 ### 4.5 删除用户（管理员）
 
 ```http
 POST /user/user_controller/delete_user
 Authorization: Bearer <admin token>
+Content-Type: application/json
 
 {"user_id": 1342014866998829056}
 ```
@@ -337,4 +362,4 @@ GET /health
 
 `#[get("/{id}")]` 风格的路径参数可通过 `ctx.path_param("id")` 或
 `ctx.param("id", ParamScope::Path)` 读取；`all` 作用域也会合并它们
-（优先级低于 body、form、query）。
+（同名字段的覆盖优先级：json > files > args > form > path）。
