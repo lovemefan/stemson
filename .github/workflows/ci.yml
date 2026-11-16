@@ -28,8 +28,35 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Tests (no database required)
+      - name: Tests (includes SQLite; no external database required)
         run: cargo test --all
 
       - name: Release build
         run: cargo build --release --locked
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stemson_backend_system
+          POSTGRES_USER: stemson
+          POSTGRES_PASSWORD: stemson
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stemson -d stemson_backend_system"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Initialize PostgreSQL
+        env:
+          PGPASSWORD: stemson
+        run: psql -h 127.0.0.1 -U stemson -d stemson_backend_system -v ON_ERROR_STOP=1 -f postgres/create_database.sql
+      - name: PostgreSQL repository and datasource integration
+        run: cargo test --locked --test postgres -- --ignored

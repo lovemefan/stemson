@@ -1,0 +1,53 @@
+# Local SQLite development configuration (port 8080).
+server:
+  name: stemson_backend
+  http:
+    host: 0.0.0.0
+    port: 8080
+    request_max_size: 10485760
+    request_timeout: 30
+  jwt:
+    secret: "dev-secret-change-me"
+    expires_in: 1800
+  auth:
+    # opaque: only OPAQUE (recommended). both: OPAQUE + Argon2id password login
+    # for accounts that still carry a hash (migration/bootstrap). password: legacy.
+    mode: both
+    opaque:
+      setup_file: "config/opaque_server_setup.bin"
+      session_ttl: 120
+      # reject a login session that was already used (async replay)
+      single_use: true
+      # memory: this process only; redis: shared by all replicas
+      nonce_store: memory
+
+  cors:
+    allowed_origins: ["*"]
+  snowflake:
+    datacenter_id: 1
+    worker_id: 2
+  log:
+    level: DEBUG
+    debug: false
+    format: "[%(asctime)s %(levelname)s ] [%(filename)s:%(lineno)d %(module)s.%(funcName)s] %(message)s"
+    filename: "logs/run.log"
+    backupCount: 5
+    maxBytes: 102400
+  config_watch: true
+
+datasource:
+  driver: sqlite
+  sqlite:
+    # Relative paths are resolved from the process working directory.
+    path: stemson.db
+    create_if_missing: true
+    max_usage: 5
+    acquire_timeout: 10
+    # Seconds to wait when another connection holds the write lock.
+    busy_timeout: 5
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  db: 0
+  password: ""

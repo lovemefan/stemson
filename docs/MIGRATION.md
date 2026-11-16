@@ -42,6 +42,9 @@ STEMSON_CONFIG=config/config.dev.yaml cargo run
 | 配置 | 处理 |
 |------|------|
 | `server.component.*` | 删除；用模块声明和宏注册组件 |
+| `datasource.driver` | 默认 `mysql`；可选 `postgres`（兼容 `postgresql` / `pgsql`）或 `sqlite`，切换后重启 |
+| `datasource.sqlite.*` | SQLite 文件路径 `path`、建文件开关 `create_if_missing`、池大小和等待超时；示例见 `config/config.sqlite.yaml` |
+| `datasource.postgres.*` | PostgreSQL 连接配置，与 MySQL 使用相同字段名；默认端口 5432 |
 | `datasource.mysql.*` | 继续使用；`acquire_timeout` 为连接池等待秒数 |
 | `redis.*` | 继续使用；支持 `db` 和 `password` |
 | `server.log.*` | 保留名称和 Python 风格模板；按天轮转，`maxBytes` 不生效 |
@@ -56,7 +59,9 @@ STEMSON_CONFIG=config/config.dev.yaml cargo run
 
 ### 2.2 升级数据库并重置旧密码
 
-新建开发库可以使用 [`mysql/create_database.sql`](../mysql/create_database.sql)。已有业务数据应先备份，按脚本中的目标表结构编写增量迁移，不应把初始化脚本当成通用升级脚本。
+新建 MySQL 开发库可以使用 [`mysql/create_database.sql`](../mysql/create_database.sql)；PostgreSQL 需先创建空数据库，再导入 [`postgres/create_database.sql`](../postgres/create_database.sql)。两份脚本使用相同的种子账号。PostgreSQL 连接示例见 `config/config.postgres.yaml`，已有 MySQL 业务数据需单独导出、转换并迁移。已有业务数据应先备份，按脚本中的目标表结构编写增量迁移，不应把初始化脚本当成通用升级脚本。
+
+SQLite 使用 [`sqlite/create_database.sql`](../sqlite/create_database.sql) 初始化空文件，种子账号相同。设置 `datasource.driver: sqlite` 并指定 `datasource.sqlite.path` 即可切换；应用不会自动转换已有 MySQL / PostgreSQL 数据。SQLite 用 INTEGER 保存有符号 64 位 ID、BLOB 保存注册记录、TEXT 保存 UTC 时间。
 
 需要核对的字段：
 
@@ -162,7 +167,7 @@ JWT 结构调整后旧 token 需要重新签发。受保护接口默认不逐请
 - [ ] 调用方 URL、4 位业务码、用户列表位置与新 token 均已适配。
 - [ ] `scripts/e2e-test.sh` 跑通登录、鉴权和用户增删改查。
 - [ ] 使用 OPAQUE 时，验证注册、登录、失败重试、setup 备份与多副本防重放。
-- [ ] `/health` 和 `/swagger` 可访问；另外验证 MySQL / Redis 连通性，存活探针不代替依赖检查。
+- [ ] `/health` 和 `/swagger` 可访问；另外验证所选数据库和 Redis 的可用性，存活探针不代替依赖检查。
 
 ## 5. 当前限制
 

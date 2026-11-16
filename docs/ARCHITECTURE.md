@@ -11,7 +11,7 @@ Stemson 把接口处理拆成 Controller、Service、Repository、Datasource 四
 | Controller | 接收 HTTP 参数、检查访问权限、组织响应 | `src/controller/user/user_controller.rs` |
 | Service | 执行业务规则、组织数据访问 | `src/service/user_service.rs` |
 | Repository | 声明 SQL、绑定参数、把结果映射为记录 | `src/repository/user_repository.rs` |
-| Datasource | 管理连接池、执行查询和事务 | `src/datasource/mysql.rs`、`redis.rs` |
+| Datasource | 管理连接池、执行查询和事务 | `src/datasource/mysql.rs`、`postgres.rs`、`sqlite.rs`、`redis.rs` |
 
 一次用户查询沿以下方向调用：
 
@@ -21,7 +21,7 @@ flowchart LR
     C --> S[Service]
     S --> R[Repository]
     R --> D[Datasource]
-    D --> DB[(MySQL)]
+    D --> DB[(MySQL / PostgreSQL / SQLite)]
 ```
 
 不访问数据库的接口可以只使用 Controller 和 Service，无需为了满足层级而添加 Repository。
@@ -211,23 +211,45 @@ multipart 文件也会整体读入内存。请求体大小由 `server.http.reque
 
 ## 6. 数据访问与事务
 
-MySQL 连接池和 Redis 连接管理器都在首次使用时初始化。因此启动成功或 `/health` 返回 200，并不表示数据库可用。
+MySQL / PostgreSQL / SQLite 连接池和 Redis 连接管理器都在首次使用时初始化。因此启动成功或 `/health` 返回 200，并不表示数据库可用或已建表。
 
 Repository 声明 SQL，Datasource 执行并转换错误。例如按用户 ID 查询时使用占位符与参数绑定：
 
 ```rust
-let sql = format!("{SELECT_USER} WHERE u1.uid = ?");
-self.mysql
-    .fetch_optional(sqlx::query_as::<_, UserRow>(&sql).bind(uid))
+// PostgreSQL 示例：注入 Arc<PostgresDataSource>。
+self.postgres
+    .fetch_optional(sqlx::query_as::<_, (i64, String)>(
+        "SELECT uid, username FROM \"user\" WHERE uid = $1",
+    ).bind(uid))
     .await
 ```
 
-这里 `SELECT_USER` 是代码中的固定 SQL 片段；用户输入 `uid` 通过 `.bind(uid)` 传入。
+用户输入 `uid` 通过 `.bind(uid)` 传入。MySQL / SQLite 使用 `?` 占位；PostgreSQL 使用 `$1`、`$2`。PostgreSQL 的 `user` 是保留字，表名必须加双引号。内置 UserRepository 按 `datasource.driver` 选择原生驱动和对应 SQL，保留时间戳和二进制字段的类型映射。
 
 - `fetch_all` / `fetch_optional` / `fetch_one`：查询并映射为 Rust 记录。
 - `execute`：执行写操作。
 - `execute_many`：同一语句多组参数，在内部事务中批量执行。
 - `begin`：显式创建事务，由调用方组织多条语句并提交。例如创建用户和复制用户组需在同一事务中完成。
+
+MySQL 的 `execute_many` 使用 `&[Vec<SqlParam>]`；PostgreSQL 的版本使用原生 `Vec<PgArguments>`，使 NULL 参数也能携带类型：
+
+```rust
+use sqlx::{postgres::PgArguments, Arguments};
+
+let mut row = PgArguments::default();
+row.add(42_i64)?;
+row.add(None::<String>)?;
+self.postgres.execute_many(
+    "INSERT INTO example (id, note) VALUES ($1, $2)",
+    vec![row],
+).await?;
+```
+
+PostgreSQL 连接配置为 `datasource.postgres.host/port/user/password/db_name/max_usage/acquire_timeout`。默认端口 5432，池大小 30，等待超时 10 秒；会话时区为 UTC。初始化脚本使用 `TIMESTAMP WITHOUT TIME ZONE`，与现有 `NaiveDateTime` 数据模型匹配。
+
+SQLite 使用 `datasource.driver: sqlite` 和 `datasource.sqlite.path`（默认 `stemson.db`）。`create_if_missing` 默认开启，只创建文件；表结构通过 `sqlite/create_database.sql` 初始化。文件路径相对于工作目录，父目录需已存在。文件数据库启用 WAL，`max_usage` 默认 5，`acquire_timeout` 默认 10 秒，`busy_timeout` 默认 5 秒。SQLite 同一时刻只有一个写事务，写入竞争超过等待时间会返回数据库错误。
+
+SQLite 的查询和事务接口与其他数据源一致，`execute_many` 接收 `Vec<SqliteArguments<'_>>`。`path: ":memory:"` 强制使用一个连接并关闭空闲和生命周期回收，避免连接池丢失内存数据；不同数据源实例的内存数据库互相隔离。初始化脚本用 INTEGER 保存 64 位 ID、BLOB 保存 OPAQUE 注册记录、TEXT 保存 UTC 时间。邀请过期检查通过 `julianday` 比较时间值，避免字符串格式影响判断。
 
 Redis 提供 `get/set/set_ex/del/get_json/ping` 和 `set_if_absent_ex`。后者执行原子 `SET NX EX`，用于 OPAQUE 多副本防重放。
 
@@ -242,7 +264,7 @@ Redis 提供 `get/set/set_ex/del/get_json/ping` 和 `set_if_absent_ex`。后者�
 | `/health` 中的 `server.name`、请求体大小上限 | 后续请求重新读取时生效 |
 | `#[value("...")]` 注入到普通字段的值 | 组件构造时固定，需重启 |
 | 端口、CORS、请求超时、日志、JWT、认证模式、OPAQUE 参数 | 启动或路由装配时读取，需重启 |
-| MySQL / Redis 连接参数 | 首次初始化后保留，修改后应重启 |
+| `datasource.driver`、MySQL / PostgreSQL / SQLite / Redis 连接参数 | 首次使用后保留，修改后应重启 |
 
 JWT 密钥由 `JwtService` 在初始化时读取，支持 `STEMSON_JWT_SECRET` 覆盖。
 
@@ -252,7 +274,7 @@ OPAQUE 把密码验证拆成客户端与服务端的两轮交换。这里有三�
 
 | 数据 | 保存位置 | 用途 |
 |------|----------|------|
-| 用户注册记录 | MySQL `user.opaque_registration` | 后续密码证明 |
+| 用户注册记录 | 所选数据库的 `user.opaque_registration` | 后续密码证明 |
 | 长期服务端密钥 | `server.auth.opaque.setup_file` | 协议计算与登录状态加密；必须持久保存、备份 |
 | 已提交登录 session 的标记 | 进程内存或共享 Redis | 防止相同 session 重复提交 |
 

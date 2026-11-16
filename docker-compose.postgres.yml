@@ -1,0 +1,42 @@
+# Alternative stack: docker compose -f docker-compose.postgres.yml up --build
+services:
+  backend:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      STEMSON_CONFIG: /app/config/config.postgres.docker.yaml
+      STEMSON_JWT_SECRET: "please-change-this-secret"
+    volumes:
+      - opaque_data:/app/opaque
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stemson_backend_system
+      POSTGRES_USER: stemson
+      POSTGRES_PASSWORD: stemson
+    volumes:
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stemson -d stemson_backend_system"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  opaque_data:

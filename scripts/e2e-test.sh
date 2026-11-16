@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# End-to-end check against a running server and a real MySQL.
+# End-to-end check against a running server and MySQL, PostgreSQL or SQLite.
 #
 #   STEMSON_URL=http://127.0.0.1:19090 scripts/e2e-test.sh
 #
-# Requires the schema from mysql/create_database.sql (seed users admin/admin123
-# and lovemefan/lovemefan123).
+# Requires mysql/create_database.sql, postgres/create_database.sql or sqlite/create_database.sql
+# (seed users admin/admin123 and lovemefan/lovemefan123).
 set -euo pipefail
 
 BASE_URL="${STEMSON_URL:-http://127.0.0.1:8080}"
@@ -57,8 +57,9 @@ check "GET /v1/api/auth/verify code" "0000" "$(request GET /v1/api/auth/verify "
 check "GET /v1/api/auth/me username" "$ADMIN_USER" "$(request GET /v1/api/auth/me "" "$TOKEN" | json_field data.me.username)"
 check "GET /v1/api/auth/me hides password" "" "$(request GET /v1/api/auth/me "" "$TOKEN" | json_field data.me.password)"
 
+wrong_password_body="{\"username\":\"${ADMIN_USER}\",\"password\":\"nope\"}"
 check "wrong password -> 0006" "0006" \
-  "$(request POST /v1/api/auth "{\"username\":\"${ADMIN_USER}\",\"password\":\"nope\"}" | json_field code)"
+  "$(request POST /v1/api/auth "$wrong_password_body" | json_field code)"
 check "unknown user -> 0013" "0013" \
   "$(request POST /v1/api/auth '{"username":"nobody","password":"whatever"}' | json_field code)"
 check "missing password -> 0010" "0010" \
@@ -67,10 +68,11 @@ check "no token -> 0014" "0014" \
   "$(request POST /user/user_controller/add_user '{}' | json_field code)"
 
 echo "== validation =="
+short_password_body="{\"username\":\"${ADMIN_USER}\",\"password\":\"123\"}"
 check "short password -> 0015" "0015" \
-  "$(request POST /user/user_controller/validate_password "{\"username\":\"${ADMIN_USER}\",\"password\":\"123\"}" | json_field code)"
+  "$(request POST /user/user_controller/validate_password "$short_password_body" | json_field code)"
 check "valid password -> 0000" "0000" \
-  "$(request POST /user/user_controller/validate_password "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASSWORD}\"}" | json_field code)"
+  "$(request POST /user/user_controller/validate_password "$login_body" | json_field code)"
 check "bad email -> 0015" "0015" \
   "$(request POST /user/user_controller/modify_user '{"user_id":1,"username":"x","email":"nope","password":"secret123","user_role":0,"status":1}' "$TOKEN" | json_field code)"
 
@@ -98,8 +100,9 @@ check "admin list contains the new user" "1" \
 data = json.load(sys.stdin)
 print(1 if any(u["username"] == sys.argv[1] for u in data["data"]) else 0)' "$NEW_USER" <<<"$list")"
 
+modify_body="{\"user_id\":${NEW_UID},\"username\":\"${NEW_USER}\",\"email\":\"${NEW_USER}@example.com\",\"password\":\"${NEW_PASSWORD}\",\"user_role\":0,\"status\":1}"
 check "modify user" "0000" \
-  "$(request POST /user/user_controller/modify_user "{\"user_id\":${NEW_UID},\"username\":\"${NEW_USER}\",\"email\":\"${NEW_USER}@example.com\",\"password\":\"${NEW_PASSWORD}\",\"user_role\":0,\"status\":1}" "$TOKEN" | json_field code)"
+  "$(request POST /user/user_controller/modify_user "$modify_body" "$TOKEN" | json_field code)"
 check "modify email persisted" "${NEW_USER}@example.com" \
   "$(request POST /user/user_controller/get_user_info "{\"user_id\":${NEW_UID}}" "$TOKEN" | json_field data.email)"
 
@@ -151,8 +154,9 @@ if [[ "${STEMSON_OPAQUE:-1}" == "1" ]]; then
         check "replayed login session rejected" "0014" \
           "$(request POST /v1/api/auth/login/finish "$finish_body" | json_field code)"
       fi
+      opaque_password_body="{\"username\":\"${OPAQUE_USER}\",\"password\":\"${OPAQUE_PASSWORD}\"}"
       check "opaque token cannot be reused as password" "0006" \
-        "$(request POST /v1/api/auth "{\"username\":\"${OPAQUE_USER}\",\"password\":\"${OPAQUE_PASSWORD}\"}" | json_field code)"
+        "$(request POST /v1/api/auth "$opaque_password_body" | json_field code)"
     fi
   else
     echo "  skip  opaque_client could not be built"

@@ -20,3 +20,9 @@ Cargo.lock.orig
 
 # OPAQUE server setup (long-term secret, never commit)
 config/opaque_server_setup.bin
+
+# Local SQLite database and journal files
+/stemson.db
+/stemson.db-wal
+/stemson.db-shm
+/stemson.db-journal

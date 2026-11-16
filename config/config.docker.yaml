@@ -36,6 +36,8 @@ server:
   config_watch: false
 
 datasource:
+  # mysql (default), postgres (also accepts postgresql / pgsql), sqlite
+  driver: mysql
   mysql:
     db_name: stemson_backend_system
     host: mysql
@@ -43,6 +45,15 @@ datasource:
     password: stemson
     port: 3306
     max_usage: 100
+    acquire_timeout: 10
+
+  postgres:
+    db_name: stemson_backend_system
+    host: postgres
+    user: stemson
+    password: "stemson"
+    port: 5432
+    max_usage: 30
     acquire_timeout: 10
 
 redis:

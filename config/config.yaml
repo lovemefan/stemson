@@ -57,6 +57,8 @@ server:
 # Rust registers components at link time, see docs/MIGRATION.md.
 
 datasource:
+  # mysql (default), postgres (also accepts postgresql / pgsql), sqlite
+  driver: mysql
   mysql:
     db_name: stemson_backend_system
     host: 127.0.0.1
@@ -66,6 +68,15 @@ datasource:
     # maximum number of pooled connections
     max_usage: 100
     # seconds to wait for a free connection
+    acquire_timeout: 10
+
+  postgres:
+    db_name: stemson_backend_system
+    host: 127.0.0.1
+    user: stemson
+    password: "stemson"
+    port: 5432
+    max_usage: 30
     acquire_timeout: 10
 
 redis:
