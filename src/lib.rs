@@ -32,6 +32,7 @@ pub mod core;
 pub mod datasource;
 pub mod exception;
 pub mod model;
+pub mod nacos;
 pub mod openapi;
 pub mod repository;
 pub mod request;

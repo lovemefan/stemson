@@ -61,11 +61,26 @@ pub async fn run() -> anyhow::Result<()> {
         .parse()
         .map_err(|err| anyhow::anyhow!("invalid listen address {host}:{port}: {err}"))?;
 
-    tracing::info!(%address, "listening");
     let listener = tokio::net::TcpListener::bind(address).await?;
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let address = listener.local_addr()?;
+    let registration = Arc::new(tokio::sync::Mutex::new(
+        crate::nacos::Registration::start_from_env(&config, address).await?,
+    ));
+    let shutdown_registration = Arc::clone(&registration);
+    tracing::info!(%address, "listening");
+    let result = axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            if let Some(registration) = &mut *shutdown_registration.lock().await {
+                registration.shutdown().await;
+            }
+        })
+        .await;
+    // Also clean up if serving ends without receiving a shutdown signal.
+    if let Some(registration) = &mut *registration.lock().await {
+        registration.shutdown().await;
+    }
+    result?;
     tracing::info!("server stopped");
     Ok(())
 }

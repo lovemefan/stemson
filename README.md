@@ -236,7 +236,7 @@ STEMSON_CONFIG=config/config.dev.yaml cargo run
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `NACOS_ENABLED` | `false` | 是否启用；支持 `true/false`、`1/0`、`yes/no`、`on/off`，不区分大小写 |
+| `NACOS_ENABLED` | `false` | 是否启用配置中心拉取；支持 `true/false`、`1/0`、`yes/no`、`on/off`，不区分大小写 |
 | `NACOS_SERVER_ADDR` | `http://127.0.0.1:8848` | 单个 HTTP(S) 地址；可省略 `http://`，默认上下文路径 `/nacos`，也可显式指定自定义路径 |
 | `NACOS_DATA_ID` | `config.yaml` | 远端配置的 Data ID，内容须为 YAML 对象 |
 | `NACOS_GROUP` | `DEFAULT_GROUP` | 配置分组 |
@@ -253,6 +253,55 @@ STEMSON_CONFIG=config/config.dev.yaml cargo run
 
 应用在日志系统初始化后记录实际配置来源：本地文件路径、Nacos 服务地址、Data ID、Group、命名空间，以及是否应用远端覆盖；远端无配置时输出 WARN，未启用时记录仅使用本地 YAML。日志同时写入控制台和配置的日志文件，遵循日志级别过滤，不输出账号密码、令牌或配置正文。框架调用方可在初始化日志后调用 `config.log_source()`；本地热重载日志中的 `nacos_overlay_applied` 表示是否重新应用了远端覆盖。
 
+### 使用 Nacos 注册中心
+
+设置 `NACOS_REGISTRY_ENABLED=true` 后，应用在绑定 HTTP 端口后向 Nacos 注册临时实例，默认每 5 秒发送心跳。第三方通过 Nacos 的服务发现接口或 SDK 查询健康实例，再直接调用实例的 HTTP 地址。注册中心与配置中心分别控制，可单独启用，也可同时启用。
+
+```bash
+# 替换为第三方能访问到的本机或容器 IP
+NACOS_REGISTRY_ENABLED=true \
+NACOS_SERVER_ADDR=http://127.0.0.1:8848 \
+NACOS_SERVICE_NAME=stemson_backend \
+NACOS_INSTANCE_IP=192.168.1.20 \
+STEMSON_CONFIG=config/config.dev.yaml cargo run
+```
+
+注册中心复用 `NACOS_SERVER_ADDR`、`NACOS_NAMESPACE`、`NACOS_USERNAME`、`NACOS_PASSWORD` 和 `NACOS_TIMEOUT_MS`。命名空间仍填写 ID，空值代表 public。配置中心的 `NACOS_DATA_ID` 和 `NACOS_GROUP` 不影响服务注册。
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `NACOS_REGISTRY_ENABLED` | `false` | 服务注册独立开关，布尔值规则同上 |
+| `NACOS_SERVICE_NAME` | 合并后配置的 `server.name`，缺省为 `stemson_backend` | 第三方发现使用的服务名 |
+| `NACOS_SERVICE_GROUP` | `DEFAULT_GROUP` | 服务分组，独立于配置中心分组 |
+| `NACOS_CLUSTER_NAME` | `DEFAULT` | 实例集群名 |
+| `NACOS_INSTANCE_IP` | HTTP 监听 IP | 第三方可访问的实例 IP；监听 `0.0.0.0` 或 `::` 时必须显式指定；不接受通配、多播地址或域名 |
+| `NACOS_INSTANCE_PORT` | HTTP 实际绑定端口 | 对外端口；容器端口映射场景可指定宿主机端口，范围 1–65535 |
+| `NACOS_METADATA` | `{}` | JSON 对象，值须为字符串，例如 `'{"version":"2.0","protocol":"http"}'` |
+| `NACOS_HEARTBEAT_INTERVAL_MS` | `5000` | 心跳间隔，1000–5000 毫秒；服务端返回建议间隔时在此范围内调整 |
+
+服务名、分组和集群名不能为空或包含 `@@`。配置注册参数变更需要重启。监听具体 IP 时可直接使用该 IP；跨主机部署应设置可路由地址，`127.0.0.1` 只适合同机调用。端口映射场景需同时设置可达的宿主机 IP 和映射端口。
+
+例如，第三方查询 `stemson_backend` 的健康实例（需要 `curl` 和 `jq`）：
+
+```bash
+# Nacos 开启认证时先登录，并为下面的查询增加 --data-urlencode "accessToken=$NACOS_TOKEN"
+# 非 public 命名空间需增加 --data-urlencode "namespaceId=实际命名空间ID"
+instances=$(curl --fail --silent --show-error --get \
+  'http://127.0.0.1:8848/nacos/v1/ns/instance/list' \
+  --data-urlencode 'serviceName=stemson_backend' \
+  --data-urlencode 'groupName=DEFAULT_GROUP' \
+  --data-urlencode 'healthyOnly=true')
+endpoint=$(printf '%s' "$instances" | jq -er \
+  '.hosts | map(select(.healthy and .enabled)) | first | select(. != null) | if (.ip | contains(":")) then "[\(.ip)]:\(.port)" else "\(.ip):\(.port)" end')
+curl --fail "http://$endpoint/health"
+```
+
+生产调用方应使用 Nacos SDK 的实例订阅、负载均衡和故障重试。业务接口继续遵循现有 JWT 认证规则，注册实例不会改变接口权限。
+
+实现使用 Nacos HTTP v1 OpenAPI（`/v1/ns/instance`、`/v1/ns/instance/beat`），需要服务端开放这些兼容接口。注册失败时启动报错；运行期间心跳失败输出 WARN 并重试，实例丢失时重新注册。账号认证令牌会按有效期提前刷新，遇到 401/403 会重新登录并重试一次。Ctrl-C / SIGTERM 时先停止心跳并注销，再停止接收新请求；异常退出或注销失败由 Nacos 根据临时实例超时剔除。INFO 记录注册地址、服务名、分组、命名空间、实例 IP/端口及注销，DEBUG 记录正常心跳，不输出密码、令牌或元数据正文。
+
+框架调用方可在绑定监听器后调用 `stemson::nacos::Registration::start_from_env(&config, listener.local_addr()?).await?`，保留返回的 guard，并在关闭 HTTP 前调用 `guard.shutdown().await`。
+
 ## 代码在哪里
 
 ```text
@@ -267,6 +316,7 @@ src/
   auth.rs / auth/         JWT / OPAQUE
   model/ / exception.rs   响应、业务码、身份模型和错误
   config.rs / openapi.rs  配置与接口文档
+  nacos/                  Nacos 认证、实例注册、心跳和注销
   utils/                  日志、密码哈希和雪花 ID
 stemson-macros/            过程宏
 config/                   默认、开发和 Docker 配置

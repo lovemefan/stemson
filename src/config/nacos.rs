@@ -1,19 +1,15 @@
 //! Startup-only Nacos HTTP OpenAPI client. Connection settings never come from YAML.
 
-use std::time::Duration;
-
 use anyhow::{bail, Context};
-use reqwest::{Client, StatusCode, Url};
-use serde::Deserialize;
+use reqwest::{Method, StatusCode};
 use serde_json::Value;
 
+use crate::nacos::client::{enabled, env, Client, ConnectionSettings};
+
 pub(super) struct Settings {
-    base_url: Url,
+    connection: ConnectionSettings,
     data_id: String,
     group: String,
-    namespace: String,
-    credentials: Option<(String, String)>,
-    timeout: Duration,
 }
 
 /// Configuration identity only; credentials and response contents are never retained here.
@@ -28,140 +24,49 @@ pub(super) struct Source {
 impl Settings {
     pub(super) fn source(&self) -> Source {
         Source {
-            server_addr: self.base_url.to_string(),
+            server_addr: self.connection.base_url.to_string(),
             data_id: self.data_id.clone(),
             group: self.group.clone(),
-            namespace: if self.namespace.is_empty() {
-                "public".to_owned()
-            } else {
-                self.namespace.clone()
-            },
+            namespace: self.connection.namespace_label().to_owned(),
         }
     }
 
     pub(super) fn from_env() -> anyhow::Result<Option<Self>> {
-        Self::from_lookup(|key| match std::env::var(key) {
-            Ok(value) => Ok(Some(value)),
-            Err(std::env::VarError::NotPresent) => Ok(None),
-            Err(_) => bail!("{key} must contain valid Unicode"),
-        })
+        Self::from_lookup(env)
     }
 
     fn from_lookup(
         lookup: impl Fn(&str) -> anyhow::Result<Option<String>>,
     ) -> anyhow::Result<Option<Self>> {
-        let enabled = lookup("NACOS_ENABLED")?.unwrap_or_else(|| "false".into());
-        match enabled.trim().to_ascii_lowercase().as_str() {
-            "false" | "0" | "no" | "off" => return Ok(None),
-            "true" | "1" | "yes" | "on" => {}
-            _ => bail!("NACOS_ENABLED must be a boolean (true/false, 1/0, yes/no, on/off)"),
+        if !enabled(lookup("NACOS_ENABLED")?, "NACOS_ENABLED")? {
+            return Ok(None);
         }
-
-        let address =
-            lookup("NACOS_SERVER_ADDR")?.unwrap_or_else(|| "http://127.0.0.1:8848".into());
-        let address = address.trim();
-        let address = if address.contains("://") {
-            address.to_owned()
-        } else {
-            format!("http://{address}")
-        };
-        let mut base_url = Url::parse(&address).context("invalid NACOS_SERVER_ADDR")?;
-        if !matches!(base_url.scheme(), "http" | "https")
-            || base_url.host_str().is_none()
-            || !base_url.username().is_empty()
-            || base_url.password().is_some()
-            || base_url.query().is_some()
-            || base_url.fragment().is_some()
-        {
-            bail!("NACOS_SERVER_ADDR must be an HTTP(S) address without credentials, query or fragment");
-        }
-        let path = if base_url.path().trim_matches('/').is_empty() {
-            "/nacos/".to_owned()
-        } else {
-            format!("{}/", base_url.path().trim_end_matches('/'))
-        };
-        base_url.set_path(&path);
+        let connection = ConnectionSettings::from_lookup(&lookup)?;
 
         let data_id = lookup("NACOS_DATA_ID")?.unwrap_or_else(|| "config.yaml".into());
         let group = lookup("NACOS_GROUP")?.unwrap_or_else(|| "DEFAULT_GROUP".into());
         if data_id.trim().is_empty() || group.trim().is_empty() {
             bail!("NACOS_DATA_ID and NACOS_GROUP must not be empty");
         }
-        let namespace = lookup("NACOS_NAMESPACE")?.unwrap_or_default();
-        let username = lookup("NACOS_USERNAME")?.filter(|v| !v.is_empty());
-        let password = lookup("NACOS_PASSWORD")?.filter(|v| !v.is_empty());
-        let credentials = match (username, password) {
-            (None, None) => None,
-            (Some(username), Some(password)) => Some((username, password)),
-            _ => bail!("NACOS_USERNAME and NACOS_PASSWORD must be set together"),
-        };
-        let timeout_ms = lookup("NACOS_TIMEOUT_MS")?
-            .unwrap_or_else(|| "5000".into())
-            .parse::<u64>()
-            .context("NACOS_TIMEOUT_MS must be a positive integer")?;
-        if timeout_ms == 0 {
-            bail!("NACOS_TIMEOUT_MS must be greater than zero");
-        }
         Ok(Some(Self {
-            base_url,
+            connection,
             data_id,
             group,
-            namespace,
-            credentials,
-            timeout: Duration::from_millis(timeout_ms),
         }))
     }
 
-    pub(super) async fn fetch(&self) -> anyhow::Result<Option<Value>> {
-        let client = Client::builder()
-            .timeout(self.timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("failed to build Nacos HTTP client")?;
-
-        let token = if let Some((username, password)) = &self.credentials {
-            let response = client
-                .post(self.base_url.join("v1/auth/login")?)
-                .form(&[("username", username), ("password", password)])
-                .send()
-                .await
-                .map_err(reqwest::Error::without_url)
-                .context("Nacos login request failed")?;
-            if !response.status().is_success() {
-                bail!("Nacos login failed with HTTP {}", response.status());
-            }
-            #[derive(Deserialize)]
-            struct Login {
-                #[serde(rename = "accessToken")]
-                access_token: String,
-            }
-            let login: Login = response
-                .json()
-                .await
-                .map_err(reqwest::Error::without_url)
-                .context("invalid Nacos login response")?;
-            if login.access_token.is_empty() {
-                bail!("Nacos login returned an empty access token");
-            }
-            Some(login.access_token)
-        } else {
-            None
-        };
-
-        let mut request = client
-            .get(self.base_url.join("v1/cs/configs")?)
-            .query(&[("dataId", &self.data_id), ("group", &self.group)]);
-        // Nacos uses the namespace ID as `tenant`; public is represented by omission.
-        if !self.namespace.is_empty() {
-            request = request.query(&[("tenant", &self.namespace)]);
+    pub(super) async fn fetch(self) -> anyhow::Result<Option<Value>> {
+        let mut params = vec![
+            ("dataId".into(), self.data_id),
+            ("group".into(), self.group),
+        ];
+        if !self.connection.namespace.is_empty() {
+            params.push(("tenant".into(), self.connection.namespace.clone()));
         }
-        if let Some(token) = token {
-            request = request.query(&[("accessToken", token)]);
-        }
-        let response = request
-            .send()
+        let mut client = Client::new(self.connection)?;
+        let response = client
+            .request(Method::GET, "v1/cs/configs", &params)
             .await
-            .map_err(reqwest::Error::without_url)
             .context("Nacos configuration request failed")?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -197,6 +102,7 @@ mod tests {
     use axum::routing::{get, post};
     use axum::Router;
     use std::collections::HashMap;
+    use std::time::Duration;
 
     use crate::config::Config;
 
@@ -245,18 +151,24 @@ mod tests {
             .unwrap()
             .is_none());
         let defaults = settings(&[("NACOS_ENABLED", "ON")]).unwrap().unwrap();
-        assert_eq!(defaults.base_url.as_str(), "http://127.0.0.1:8848/nacos/");
+        assert_eq!(
+            defaults.connection.base_url.as_str(),
+            "http://127.0.0.1:8848/nacos/"
+        );
         assert_eq!(defaults.data_id, "config.yaml");
         assert_eq!(defaults.group, "DEFAULT_GROUP");
-        assert!(defaults.namespace.is_empty());
-        assert_eq!(defaults.timeout, Duration::from_secs(5));
+        assert!(defaults.connection.namespace.is_empty());
+        assert_eq!(defaults.connection.timeout, Duration::from_secs(5));
         let custom = settings(&[
             ("NACOS_ENABLED", "1"),
             ("NACOS_SERVER_ADDR", "localhost:8848/custom/"),
         ])
         .unwrap()
         .unwrap();
-        assert_eq!(custom.base_url.as_str(), "http://localhost:8848/custom/");
+        assert_eq!(
+            custom.connection.base_url.as_str(),
+            "http://localhost:8848/custom/"
+        );
         assert!(settings(&[("NACOS_ENABLED", "typo")]).is_err());
         for (key, value) in [
             ("NACOS_TIMEOUT_MS", "0"),
@@ -403,10 +315,11 @@ mod tests {
         )
         .await;
         let mut settings = server.settings();
-        settings.timeout = Duration::from_millis(20);
+        settings.connection.timeout = Duration::from_millis(20);
         assert!(settings.fetch().await.is_err());
-        settings.credentials = Some(("reader".into(), "secret".into()));
-        settings.timeout = Duration::from_secs(5);
+        let mut settings = server.settings();
+        settings.connection.credentials = Some(("reader".into(), "secret".into()));
+        settings.connection.timeout = Duration::from_secs(5);
         let error = format!("{:#}", settings.fetch().await.unwrap_err());
         assert!(error.contains("401"));
         assert!(!error.contains("secret"));

@@ -35,7 +35,7 @@ flowchart LR
 3. 创建 `AppContext`，初始化 JWT、认证模式和可选的 OPAQUE 服务。
 4. 按配置开启文件监听，构造组件容器。
 5. 汇总控制器路由，加入 `/health`、Swagger、OpenAPI 和全局中间件。
-6. 绑定地址，开始接收请求；退出时处理 Ctrl-C / SIGTERM。
+6. 绑定地址；若 `NACOS_REGISTRY_ENABLED=true`，使用实际端口注册临时实例并启动心跳，然后接收请求。Ctrl-C / SIGTERM 时停止心跳并注销，再进入 HTTP 优雅停机。
 
 `AppContext` 保存配置、组件、认证服务和路由表。`AppState` 把这个上下文交给 Axum handler；`RequestContext` 则保存某一次请求的数据。
 
@@ -262,6 +262,8 @@ Redis 提供 `get/set/set_ex/del/get_json/ping` 和 `set_if_absent_ex`。后者�
 开启 `server.config_watch` 后，`notify` 监听文件变更，200 ms 去抖，再用 `arc-swap` 原子替换配置快照。**快照更新不等于已构造的对象被重建。**
 
 已启用 Nacos 时，本地热重载会重新应用启动时拉取的远端覆盖，维持 Nacos 的优先级。当前仅在启动时拉取，不监听远端变更；Nacos 内容及连接环境变量变更需要重启。
+
+服务注册由独立的 `NACOS_REGISTRY_ENABLED` 控制，与配置拉取共享 `src/nacos/client.rs` 中的地址、命名空间和认证逻辑。`src/nacos/registry.rs` 使用 v1 HTTP OpenAPI 注册临时实例、发送完整心跳，并在服务端报告实例丢失时重新注册。认证令牌按 TTL 提前刷新，401/403 触发一次重新登录重试。实例使用 `NACOS_SERVICE_NAME`（默认合并后的 `server.name`）、独立服务分组和可达的 IP/端口；监听通配地址时必须指定 `NACOS_INSTANCE_IP`。注册失败使启动失败，心跳错误记录后继续重试，正常退出先注销；非正常退出由服务端按临时实例超时清理。第三方按相同服务名、分组、命名空间发现健康实例，再调用原 HTTP API；具体参数和调用示例见 [Nacos 注册中心](../README.md#使用-nacos-注册中心)。
 
 | 配置用途 | 生效时机 |
 |----------|----------|
