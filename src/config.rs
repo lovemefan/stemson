@@ -6,6 +6,9 @@
 //! * `get(key, default)` semantics identical to the Python implementation.
 //! * Hot reload: the file is watched and atomically swapped on change
 //!   (`notify` + `arc-swap`), so readers never block.
+//! * Optional startup Nacos YAML overlay, controlled by `NACOS_*` variables.
+
+mod nacos;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,6 +25,8 @@ use serde_json::Value;
 pub struct Config {
     path: PathBuf,
     data: ArcSwap<Value>,
+    nacos_overlay: Option<Value>,
+    nacos_source: Option<nacos::Source>,
 }
 
 impl Config {
@@ -32,15 +37,61 @@ impl Config {
         Ok(Arc::new(Self {
             path,
             data: ArcSwap::from_pointee(data),
+            nacos_overlay: None,
+            nacos_source: None,
         }))
     }
 
     /// Load the configuration path from `STEMSON_CONFIG` or the default
     /// `config/config.yaml`.
     pub fn load_default() -> anyhow::Result<Arc<Self>> {
-        let path =
-            std::env::var("STEMSON_CONFIG").unwrap_or_else(|_| "config/config.yaml".to_string());
-        Self::load(path)
+        Self::load(Self::default_path())
+    }
+
+    /// Load local YAML and overlay Nacos YAML when `NACOS_ENABLED=true`.
+    /// Missing or empty remote configuration leaves the local configuration intact.
+    /// Connection, authentication and invalid configuration errors are returned.
+    pub async fn load_with_nacos(path: impl AsRef<Path>) -> anyhow::Result<Arc<Self>> {
+        Self::load_with_nacos_settings(path, nacos::Settings::from_env()?).await
+    }
+
+    async fn load_with_nacos_settings(
+        path: impl AsRef<Path>,
+        settings: Option<nacos::Settings>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let path = path.as_ref().to_path_buf();
+        let mut data = Self::read_file(&path)?;
+        let (nacos_overlay, nacos_source) = match settings {
+            Some(settings) => {
+                let source = settings.source();
+                let overlay = settings.fetch().await.with_context(|| {
+                    format!(
+                        "failed to load Nacos configuration: server_addr={} data_id={:?} group={:?} namespace={:?} local_file={}",
+                        source.server_addr, source.data_id, source.group, source.namespace, path.display()
+                    )
+                })?;
+                (overlay, Some(source))
+            }
+            None => (None, None),
+        };
+        if let Some(overlay) = &nacos_overlay {
+            merge(&mut data, overlay);
+        }
+        Ok(Arc::new(Self {
+            path,
+            data: ArcSwap::from_pointee(data),
+            nacos_overlay,
+            nacos_source,
+        }))
+    }
+
+    /// Like [`Config::load_default`], with the optional Nacos startup overlay.
+    pub async fn load_default_with_nacos() -> anyhow::Result<Arc<Self>> {
+        Self::load_with_nacos(Self::default_path()).await
+    }
+
+    fn default_path() -> String {
+        std::env::var("STEMSON_CONFIG").unwrap_or_else(|_| "config/config.yaml".to_string())
     }
 
     fn read_file(path: &Path) -> anyhow::Result<Value> {
@@ -62,6 +113,38 @@ impl Config {
         &self.path
     }
 
+    /// Log the effective configuration sources after initializing the logger.
+    /// Only source identifiers are logged, never credentials or configuration contents.
+    pub fn log_source(&self) {
+        match &self.nacos_source {
+            Some(source) => {
+                if self.nacos_overlay.is_some() {
+                    tracing::info!(
+                        local_file = %self.path.display(),
+                        server_addr = %source.server_addr,
+                        data_id = %source.data_id,
+                        group = %source.group,
+                        namespace = %source.namespace,
+                        "configuration loaded: Nacos overrides local YAML; unspecified keys use local values"
+                    );
+                } else {
+                    tracing::warn!(
+                        local_file = %self.path.display(),
+                        server_addr = %source.server_addr,
+                        data_id = %source.data_id,
+                        group = %source.group,
+                        namespace = %source.namespace,
+                        "Nacos configuration missing or empty; using local YAML only"
+                    );
+                }
+            }
+            None => tracing::info!(
+                local_file = %self.path.display(),
+                "configuration loaded: using local YAML only; Nacos loading is disabled"
+            ),
+        }
+    }
+
     /// Immutable snapshot of the whole configuration tree.
     pub fn snapshot(&self) -> Arc<Value> {
         self.data.load_full()
@@ -69,7 +152,10 @@ impl Config {
 
     /// Re-read the configuration file from disk.
     pub fn reload(&self) -> anyhow::Result<()> {
-        let data = Self::read_file(&self.path)?;
+        let mut data = Self::read_file(&self.path)?;
+        if let Some(overlay) = &self.nacos_overlay {
+            merge(&mut data, overlay);
+        }
         self.data.store(Arc::new(data));
         Ok(())
     }
@@ -192,6 +278,7 @@ impl Config {
                     match config.reload() {
                         Ok(()) => tracing::info!(
                             file = %config.path.display(),
+                            nacos_overlay_applied = config.nacos_overlay.is_some(),
                             "configuration reloaded"
                         ),
                         Err(err) => tracing::error!(
@@ -207,6 +294,17 @@ impl Config {
             _watcher: watcher,
             _handle: Some(handle),
         })
+    }
+}
+
+/// Merge mappings recursively; remote scalars, arrays and null replace local nodes.
+fn merge(local: &mut Value, remote: &Value) {
+    if let (Value::Object(local), Value::Object(remote)) = (&mut *local, remote) {
+        for (key, value) in remote {
+            merge(local.entry(key.clone()).or_insert(Value::Null), value);
+        }
+    } else {
+        *local = remote.clone();
     }
 }
 

@@ -257,7 +257,11 @@ Redis 提供 `get/set/set_ex/del/get_json/ping` 和 `set_if_absent_ex`。后者�
 
 `Config::get("a.b.c")` 按点号逐层取值；`string/i64/u16/bool/get_as/require` 提供类型化读取。配置是完整文件加载，不是默认配置与开发配置合并。
 
+应用启动使用 `Config::load_default_with_nacos().await`：先加载 `STEMSON_CONFIG` 指定的本地文件，再在 `NACOS_ENABLED=true` 时拉取远端 YAML。远端对象递归合并，数组、标量和 `null` 整体覆盖，未指定字段保留本地值。连接参数完全来自 `NACOS_*` 环境变量，详见 [Nacos 配置说明](../README.md#使用-nacos-配置中心)。拉取在日志、JWT、组件和路由初始化前完成；404 或空内容回退本地，连接、认证和解析错误使启动失败。同步 `Config::load/load_default` 保持仅加载本地文件的行为。
+
 开启 `server.config_watch` 后，`notify` 监听文件变更，200 ms 去抖，再用 `arc-swap` 原子替换配置快照。**快照更新不等于已构造的对象被重建。**
+
+已启用 Nacos 时，本地热重载会重新应用启动时拉取的远端覆盖，维持 Nacos 的优先级。当前仅在启动时拉取，不监听远端变更；Nacos 内容及连接环境变量变更需要重启。
 
 | 配置用途 | 生效时机 |
 |----------|----------|

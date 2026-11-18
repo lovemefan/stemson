@@ -213,6 +213,46 @@ STEMSON_CONFIG=config/config.dev.yaml cargo run
 - Redis 在默认单实例配置下可选；OPAQUE 多副本防重放需要共享 Redis，并设置 `server.auth.opaque.nonce_store: redis`。
 - 热重载只影响后续读取配置的逻辑。端口、连接池、JWT 和认证模式等已初始化的对象需要重启，详见[配置生效范围](docs/ARCHITECTURE.md#7-配置什么时候生效)。
 
+### 使用 Nacos 配置中心
+
+启动时可从 Nacos 拉取一份 YAML，按字段递归覆盖 `STEMSON_CONFIG` 指定的本地配置（默认 `config/config.yaml`）。Nacos 只需填写要覆盖的字段，未提供的字段继续使用本地值。例如在 Nacos 创建 Data ID 为 `config.yaml`、Group 为 `DEFAULT_GROUP` 的 YAML 配置：
+
+```yaml
+server:
+  http:
+    port: 9090
+datasource:
+  mysql:
+    host: mysql.internal
+```
+
+```bash
+NACOS_ENABLED=true \
+NACOS_SERVER_ADDR=http://127.0.0.1:8848 \
+NACOS_DATA_ID=config.yaml \
+NACOS_GROUP=DEFAULT_GROUP \
+STEMSON_CONFIG=config/config.dev.yaml cargo run
+```
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `NACOS_ENABLED` | `false` | 是否启用；支持 `true/false`、`1/0`、`yes/no`、`on/off`，不区分大小写 |
+| `NACOS_SERVER_ADDR` | `http://127.0.0.1:8848` | 单个 HTTP(S) 地址；可省略 `http://`，默认上下文路径 `/nacos`，也可显式指定自定义路径 |
+| `NACOS_DATA_ID` | `config.yaml` | 远端配置的 Data ID，内容须为 YAML 对象 |
+| `NACOS_GROUP` | `DEFAULT_GROUP` | 配置分组 |
+| `NACOS_NAMESPACE` | 空 | 命名空间 **ID**，空值使用 public；不填命名空间显示名称 |
+| `NACOS_USERNAME` | 未设置 | 开启 Nacos 认证时使用，须与密码同时设置 |
+| `NACOS_PASSWORD` | 未设置 | Nacos 登录密码 |
+| `NACOS_TIMEOUT_MS` | `5000` | 单次 HTTP 请求超时，正整数毫秒；登录和拉取分别计时 |
+
+启用后通过 Nacos HTTP OpenAPI `/v1/cs/configs` 拉取；配置账号密码时先调用 `/v1/auth/login` 获取令牌。Nacos 返回 404 或空内容时保留本地配置；连接失败、超时、认证失败或远端 YAML 非法时启动报错。未启用时不访问 Nacos，也不校验其余 `NACOS_*` 参数。本地配置文件始终需要存在且有效。
+
+对象递归合并，数组、标量和显式 `null` 整体替换对应本地节点。Nacos 配置在日志、组件和数据源初始化前生效；本地文件热重载时会重新应用启动时取得的 Nacos 覆盖值。当前不订阅或轮询远端变更，修改 Nacos 配置或连接环境变量后需重启。`STEMSON_JWT_SECRET` 仍优先于配置树中的 JWT 密钥。
+
+框架调用方可使用 `Config::load_with_nacos(path).await` 或 `Config::load_default_with_nacos().await`；现有同步 `Config::load` / `Config::load_default` 继续只读取本地文件。
+
+应用在日志系统初始化后记录实际配置来源：本地文件路径、Nacos 服务地址、Data ID、Group、命名空间，以及是否应用远端覆盖；远端无配置时输出 WARN，未启用时记录仅使用本地 YAML。日志同时写入控制台和配置的日志文件，遵循日志级别过滤，不输出账号密码、令牌或配置正文。框架调用方可在初始化日志后调用 `config.log_source()`；本地热重载日志中的 `nacos_overlay_applied` 表示是否重新应用了远端覆盖。
+
 ## 代码在哪里
 
 ```text

@@ -29,8 +29,9 @@ use crate::utils::{logger, snowflake};
 ///
 /// This is what `python backend/app.py` did.
 pub async fn run() -> anyhow::Result<()> {
-    let config = Config::load_default()?;
+    let config = Config::load_default_with_nacos().await?;
     let _logger_guard = logger::init(&config)?;
+    config.log_source();
 
     let datacenter_id = config.i64("server.snowflake.datacenter_id", 1).max(0) as u64;
     let worker_id = config.i64("server.snowflake.worker_id", 2).max(0) as u64;
